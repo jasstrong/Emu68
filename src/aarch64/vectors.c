@@ -137,11 +137,12 @@ void  __attribute__((used)) __stub_vectors()
 "       b ExceptionExit                 \n"
 "                                       \n"
 "       .balign 0x80                    \n"
-"curr_el_spx_irq:                       \n" // The exception handler for an IRQ exception from 
+"curr_el_spx_irq:                       \n" // The exception handler for an IRQ exception from
 "       stp x0, x1, [sp, -16]!          \n" // the current EL using the current SP.
 "       mrs x0, SPSR_EL1                \n" // Get SPSR
 "       orr x0, x0, #0x080              \n" // Disable IRQ interrupt so that we are not disturbed on return
 "       msr SPSR_EL1, x0                \n"
+#ifndef MAC68K
 "       adrp x1, INT_shadow             \n" // Load INTENA shadow
 "       add x1, x1, :lo12:INT_shadow    \n"
 "       ldrh w0, [x1, #%[intena]]       \n"
@@ -153,15 +154,22 @@ void  __attribute__((used)) __stub_vectors()
 "       mrs x1, TPIDRRO_EL0             \n" // Load CPU context
 "       mov w0, #6                      \n" // Set level 6 IRQ
 "       strb w0, [x1, #%[pint]]         \n"
-"1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+"1:                                     \n"
+#else
+"       mrs x1, TPIDRRO_EL0             \n" // Mac: unconditionally deliver IRQ — VIA handles masking
+"       mov w0, #1                      \n" // Set level 1 IRQ
+"       strb w0, [x1, #%[pint]]         \n"
+#endif
+"       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
 "       eret                            \n"
 "                                       \n"
 "       .balign 0x80                    \n"
-"curr_el_spx_fiq:                       \n" // The exception handler for an FIQ from 
+"curr_el_spx_fiq:                       \n" // The exception handler for an FIQ from
 "       stp x0, x1, [sp, -16]!          \n" // the current EL using the current SP.
 "       mrs x0, SPSR_EL1                \n" // Get SPSR
 "       orr x0, x0, #0x0c0              \n" // Disable IRQ and FIQ interrupts so that we are not disturbed on return
 "       msr SPSR_EL1, x0                \n"
+#ifndef MAC68K
 "       adrp x1, INT_shadow             \n" // Load INTENA shadow
 "       add x1, x1, :lo12:INT_shadow    \n"
 "       ldrh w0, [x1, #%[intena]]       \n"
@@ -173,7 +181,13 @@ void  __attribute__((used)) __stub_vectors()
 "       mrs x1, TPIDRRO_EL0             \n" // Load CPU context
 "       mov w0, #6                      \n" // Set level 6 IRQ
 "       strb w0, [x1, #%[pint]]         \n"
-"1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+"1:                                     \n"
+#else
+"       mrs x1, TPIDRRO_EL0             \n" // Mac: unconditionally deliver IRQ — VIA handles masking
+"       mov w0, #1                      \n" // Set level 1 IRQ
+"       strb w0, [x1, #%[pint]]         \n"
+#endif
+"       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
 "       eret                            \n"
 "                                       \n"
 "       .balign 0x80                    \n"
@@ -292,6 +306,109 @@ static int getOPsize(uint32_t opcode)
 #ifdef PISTORM
 
 #include "ps_protocol.h"
+
+#ifdef MAC68K
+
+/* Mac68k Phase 1: all memory access through PiStorm */
+
+/* Stubs required by ps_protocol.c (ps_pulse_reset references these) */
+#include <boards.h>
+int board_idx = 0;
+struct ExpansionBoard **board;
+uint32_t overlay = 1;
+
+/* Bring-up trace: log first N accesses so we can see if PiStorm is talking */
+static int mac68k_trace_count = 0;
+#define MAC68K_TRACE_LIMIT 40
+
+int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
+{
+    D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
+
+    /* Allow single wrap around the address space */
+    if ((far >> 32) == 1 || (far >> 32) == 0xffffffff) {
+        far &= 0xffffffff;
+    }
+
+    /* Debug output port */
+    if (far == 0xdeadbeef && size == 1) {
+        kprintf("%c", value);
+        return 1;
+    }
+
+    if (mac68k_trace_count < MAC68K_TRACE_LIMIT) {
+        kprintf("[MAC] W%d %06x <- %08x\n", size, (uint32_t)far, (uint32_t)value);
+        mac68k_trace_count++;
+    }
+
+    /* Pass everything through to PiStorm */
+    switch(size)
+    {
+        case 1:
+            ps_write_8(far, value);
+            break;
+        case 2:
+            ps_write_16(far, value);
+            break;
+        case 4:
+            ps_write_32(far, value);
+            break;
+        case 8:
+            ps_write_64(far, value);
+            break;
+        case 16:
+        {
+            uint128_t val;
+            val.hi = value;
+            val.lo = value2;
+            ps_write_128(far, val);
+            break;
+        }
+    }
+    return 1;
+}
+
+int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far)
+{
+    D(kprintf("[JIT:SYS] SYSReadValFromAddr(%d, %p)\n", size, far));
+
+    /* Allow single wrap around the address space */
+    if ((far >> 32) == 1 || (far >> 32) == 0xffffffff) {
+        far &= 0xffffffff;
+    }
+
+    /* Read everything from PiStorm */
+    switch(size)
+    {
+        case 1:
+            *value = ps_read_8(far);
+            break;
+        case 2:
+            *value = ps_read_16(far);
+            break;
+        case 4:
+            *value = ps_read_32(far);
+            break;
+        case 8:
+            *value = ps_read_64(far);
+            break;
+        case 16:
+        {
+            uint128_t v = ps_read_128(far);
+            *value = v.hi;
+            *value2 = v.lo;
+        }
+    }
+
+    if (mac68k_trace_count < MAC68K_TRACE_LIMIT) {
+        kprintf("[MAC] R%d %06x -> %08x\n", size, (uint32_t)far, (uint32_t)*value);
+        mac68k_trace_count++;
+    }
+
+    return 1;
+}
+
+#else /* Amiga PiStorm */
 
 #include <boards.h>
 
@@ -661,12 +778,14 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
     return 1;
 }
 
-#else
+#endif /* MAC68K */
+
+#else /* !PISTORM */
 
 int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
 {
     D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
-    
+
     switch(size)
     {
         case 1:

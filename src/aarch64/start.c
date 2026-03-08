@@ -537,11 +537,13 @@ void boot(void *dtree)
     boot_lock = 0;
 
 #ifdef PISTORM
+    vid_memory = 16;
+#ifndef MAC68K
     int rom_copy = 0;
     int recalc_checksum = 0;
     int buptest = 0;
     int bupiter = 5;
-    vid_memory = 16;
+#endif
 #endif
 
     /* Enable caches and cache maintenance instructions from EL0 */
@@ -728,6 +730,23 @@ void boot(void *dtree)
                 emu68_icnt = val;
             }
 
+            if ((tok = find_token(prop->op_value, "vc4.mem=")))
+            {
+                uint32_t vmem = 0;
+
+                for (int i=0; i < 3; i++)
+                {
+                    if (tok[8 + i] < '0' || tok[8 + i] > '9')
+                        break;
+
+                    vmem = vmem * 10 + tok[8 + i] - '0';
+                }
+
+                if (vmem <= 256) {
+                    vid_memory = vmem & ~1;
+                }
+            }
+#ifndef MAC68K
             if ((tok = find_token(prop->op_value, "buptest=")))
             {
                 uint32_t bup = 0;
@@ -743,7 +762,7 @@ void boot(void *dtree)
                 if (bup > 2048) {
                     bup = 2048;
                 }
-                
+
                 buptest = bup;
             }
             if ((tok = find_token(prop->op_value, "bupiter=")))
@@ -761,29 +780,13 @@ void boot(void *dtree)
                 if (iter > 9) {
                     iter = 9;
                 }
-                
+
                 bupiter = iter;
-            }
-            if ((tok = find_token(prop->op_value, "vc4.mem=")))
-            {
-                uint32_t vmem = 0;
-
-                for (int i=0; i < 3; i++)
-                {
-                    if (tok[8 + i] < '0' || tok[8 + i] > '9')
-                        break;
-
-                    vmem = vmem * 10 + tok[8 + i] - '0';
-                }
-
-                if (vmem <= 256) {
-                    vid_memory = vmem & ~1;
-                }
             }
             if ((tok = find_token(prop->op_value, "checksum_rom")))
             {
                 recalc_checksum = 1;
-            } 
+            }
             if ((tok = find_token(prop->op_value, "copy_rom=")))
             {
                 tok += 9;
@@ -814,7 +817,8 @@ void boot(void *dtree)
                         break;
                 }
             }
-#endif
+#endif /* !MAC68K */
+#endif /* PISTORM */
         }
     }
 
@@ -1305,6 +1309,7 @@ void boot(void *dtree)
 
 #else
 
+#ifndef MAC68K
     if (rom_copy != 0)
     {
         kprintf("[BOOT] %dk ROM copy requested\n", rom_copy);
@@ -1316,7 +1321,7 @@ void boot(void *dtree)
         }
         mmu_map(0xf80000, 0xf80000, 524288, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
 
-        /* For larger ROMs copy also 512K from 0xe00000 (1M) and 0xa80000, 0xb00000 (2M) */ 
+        /* For larger ROMs copy also 512K from 0xe00000 (1M) and 0xa80000, 0xb00000 (2M) */
         if (rom_copy == 1024)
         {
             for (int i=0; i < 524288; i+=4)
@@ -1357,7 +1362,7 @@ void boot(void *dtree)
 
         kprintf("[BOOT] Loading ROM from %p, size %d\n", initramfs_loc, initramfs_size);
         mmu_map(0xf80000, 0xf80000, 524288, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
-            
+
         if (initramfs_size == 262144)
         {
             /* Make a shadow of 0xf80000 at 0xe00000 */
@@ -1417,7 +1422,7 @@ void boot(void *dtree)
                             uint8_t tmp = rom_start[i];
                             rom_start[i] = rom_start[i + 1];
                             rom_start[i+1] = tmp;
-                        }   
+                        }
                     }
                 }
             }
@@ -1427,6 +1432,14 @@ void boot(void *dtree)
 
         tlsf_free(tlsf, initramfs_loc);
     }
+#else
+    /* Mac68k: no local ROM caching in Phase 1 — all reads go through PiStorm */
+    if (initramfs_loc != NULL)
+    {
+        kprintf("[BOOT] Mac68k mode - ROM reads via PiStorm\n");
+        tlsf_free(tlsf, initramfs_loc);
+    }
+#endif
 
 
     if (0)
@@ -1485,6 +1498,7 @@ void boot(void *dtree)
     //dt_dump_tree();
 
 #ifdef PISTORM
+#ifndef MAC68K
     //amiga_checksum((void*)0xffffff9000e00000, 524288, 524288-24, 1);
     if (recalc_checksum)
         amiga_checksum((void*)0xffffff9000f80000, 524288, 524288-24, 1);
@@ -1493,13 +1507,15 @@ void boot(void *dtree)
     {
         ps_buptest(buptest, bupiter);
     }
-#endif
 
     /* If fast_page_zero is enabled, map first 4K to ROM directly (Overlay active) */
     if (fast_page0) {
         mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
     }
-    
+#else
+    kprintf("[BOOT] Mac68k - starting emulation\n");
+#endif
+
     M68K_StartEmu(0, NULL);
 
 #endif
@@ -2151,7 +2167,7 @@ void M68K_StartEmu(void *addr, void *fdt)
             if (strstr(prop->op_value, "disassemble"))
                 disasm = 1;
 
-#ifdef PISTORM
+#if defined(PISTORM) && !defined(MAC68K)
             extern uint32_t swap_df0_with_dfx;
             extern uint32_t move_slow_to_chip;
 

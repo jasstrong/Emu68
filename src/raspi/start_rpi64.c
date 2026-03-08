@@ -235,7 +235,9 @@ uintptr_t top_of_ram;
 #ifdef PISTORM
 #include "ps_protocol.h"
 
+#ifndef MAC68K
 extern int block_c0;
+#endif
 #endif
 
 void platform_init()
@@ -320,6 +322,7 @@ void platform_post_init()
     display_logo();
 
 #ifdef PISTORM
+#ifndef MAC68K
     kprintf("[BOOT] sending RESET signal to Amiga\n");
     ps_pulse_reset();
 
@@ -340,6 +343,10 @@ void platform_post_init()
             }
         }
     }
+#else
+    kprintf("[BOOT] Mac68k mode - sending RESET\n");
+    ps_pulse_reset();
+#endif
 #endif
 
     //*(volatile uint32_t *)0xf3000034 = LE32((7680000) | 0x30000000);
