@@ -1537,8 +1537,13 @@ void boot(void *dtree)
             *(volatile uint32_t *)(uintptr_t)0x400000, *(volatile uint32_t *)(uintptr_t)0x400004);
 
     /* Verify ROM copy BEFORE mmu_map (both paths uncached).
-       OVL is still active so bus reads from 0 return ROM.
-       Pi RAM reads from uncached 0x400000 return what we just wrote. */
+       Reset FPGA state machine first — it may be desynchronized after 131K reads. */
+    ps_reset_state_machine();
+    {
+        unsigned int d;
+        for (int i = 0; i < 3; i++) d = ps_read_16(0);
+        (void)d;
+    }
     {
         int errors = 0;
         for (int i = 0; i < 262144; i += 2)
