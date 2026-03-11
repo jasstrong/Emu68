@@ -18,6 +18,7 @@
  */
 
 #include <math.h>
+#undef log2
 #include <stdint.h>
 
 static const double
