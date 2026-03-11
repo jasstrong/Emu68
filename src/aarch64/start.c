@@ -1522,6 +1522,33 @@ void boot(void *dtree)
         mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
     }
 #else
+    /* Mac68k: Copy ROM from the bus into Pi RAM.
+       At reset the Mac's OVL (overlay) maps ROM at address 0.
+       Read 256KB from there before any access >= 0x400000 disables it.
+       Store into Pi RAM at 0x400000 (standard ROM location) so the JIT
+       translator can read opcodes directly.  Also copy to address 0
+       so reset vector reads work. */
+    kprintf("[BOOT] Mac68k - copying 256KB ROM from bus (OVL active)...\n");
+    for (int i = 0; i < 262144; i += 4)
+    {
+        *(uint32_t *)(0xffffff9000400000 + i) = ps_read_32(i);
+    }
+    /* Copy ROM also to address 0 (reset vectors + overlay mirror) */
+    DuffCopy((void *)0xffffff9000000000, (void *)0xffffff9000400000, 262144 / 4);
+    kprintf("[BOOT] Mac68k - ROM copied. First words: %08x %08x\n",
+            *(uint32_t *)0xffffff9000400000, *(uint32_t *)0xffffff9000400004);
+
+    /* Map ROM at 0x400000 so JIT code (EL0) reads directly from Pi RAM */
+    mmu_map(0x400000, 0x400000, 262144,
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+
+    /* Trigger OVL disable: any bus access >= 0x400000 flips the hardware latch */
+    {
+        volatile unsigned int dummy = ps_read_16(0x400000);
+        (void)dummy;
+    }
+    kprintf("[BOOT] Mac68k - OVL disabled, ROM at 0x400000, RAM at 0x000000\n");
+
     kprintf("[BOOT] Mac68k - starting emulation\n");
 #endif
 
