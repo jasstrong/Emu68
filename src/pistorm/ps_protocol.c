@@ -1109,6 +1109,16 @@ void bus_task(void)
     /* Reset FPGA state machine before starting bus operations */
     ps_reset_state_machine();
 
+    /* Warm-up: the first bus cycle after FPGA reset may not assert TXN.
+       Do a few dummy reads to prime the state machine, discard results. */
+    {
+        unsigned int d;
+        for (int i = 0; i < 3; i++) {
+            d = ps_read_16_int_nowbwait(0);
+            kprintf("[BUS] Warm-up read %d: %04x\n", i, d);
+        }
+    }
+
     kprintf("[BUS] Bus controller activated on core 3\n");
     bus_task_ready = 1;
     asm volatile("dsb sy" ::: "memory");
