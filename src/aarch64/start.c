@@ -2132,14 +2132,15 @@ void M68K_StartEmu(void *addr, void *fdt)
     (void)fdt;
 
 #ifdef MAC68K
-    /* Read reset vectors from ROM at 0x400000 (already copied to Pi RAM) */
-    asm volatile("mov %0, #0x400000":"=r"(addr));
+    /* Read reset vectors from ROM via bus (OVL already disabled, ROM at 0x400000) */
+    __m68k.ISP.u32 = ps_read_32(0x400000);
+    __m68k.PC = ps_read_32(0x400004);
+    (void)addr;
 #else
     asm volatile("mov %0, #0":"=r"(addr));
-#endif
-
     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
     __m68k.PC = BE32(*((uint32_t*)addr+1));
+#endif
     __m68k.SR = BE16(SR_S | SR_IPL);
     __m68k.FPCR = 0;
     __m68k.JIT_CACHE_TOTAL = tlsf_get_total_size(jit_tlsf);
