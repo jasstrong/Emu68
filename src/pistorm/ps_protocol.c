@@ -329,13 +329,6 @@ static void setup_gpclk() {
 
 static unsigned int ps_read_16_int_nowbwait(unsigned int address);
 
-/* Settle time: a few dummy GPIO reads (~10ns each) to let signals propagate
-   from the Pi's GPIO pads through the level shifter to the FPGA */
-#define GPIO_SETTLE() do { \
-    (void)*(gpio + 13); \
-    (void)*(gpio + 13); \
-} while(0)
-
 void ps_setup_protocol() {
     uint64_t clock;
     uint64_t delay;
@@ -423,7 +416,6 @@ static void ps_write_16_int(unsigned int address, unsigned int data)
         *(gpio + 2) = LE32(OUTPUT[2]);
 
         *(gpio + 7) = LE32(((data & 0xffff) << 8) | (REG_DATA << PIN_A0));
-        GPIO_SETTLE();
         if (tmp > 20000000)
         {
             *(gpio + 7) = LE32(1 << PIN_WR);
@@ -440,7 +432,6 @@ static void ps_write_16_int(unsigned int address, unsigned int data)
         *(gpio + 10) = LE32(CLEAR_BITS);
 
         *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
-        GPIO_SETTLE();
         if (tmp > 20000000)
         {
             *(gpio + 7) = LE32(1 << PIN_WR);
@@ -457,7 +448,6 @@ static void ps_write_16_int(unsigned int address, unsigned int data)
         *(gpio + 10) = LE32(CLEAR_BITS);
 
         *(gpio + 7) = LE32(((0x0000 | ((address >> 16) & 0x00ff)) << 8) | (REG_ADDR_HI << PIN_A0));
-        GPIO_SETTLE();
         if (tmp > 20000000)
         {
             *(gpio + 7) = LE32(1 << PIN_WR);
@@ -477,8 +467,6 @@ static void ps_write_16_int(unsigned int address, unsigned int data)
         *(gpio + 1) = LE32(INPUT[1]);
         *(gpio + 2) = LE32(INPUT[2]);
 
-        /* Two-phase TXN wait for writes too */
-        while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
         while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {}
     }
 }
@@ -500,7 +488,6 @@ static void ps_write_8_int(unsigned int address, unsigned int data)
     *(gpio + 2) = LE32(OUTPUT[2]);
 
     *(gpio + 7) = LE32(((data & 0xffff) << 8) | (REG_DATA << PIN_A0));
-    GPIO_SETTLE();
     if (tmp > 20000000)
     {
         *(gpio + 7) = LE32(1 << PIN_WR);
@@ -517,7 +504,6 @@ static void ps_write_8_int(unsigned int address, unsigned int data)
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
-    GPIO_SETTLE();
     if (tmp > 20000000)
     {
         *(gpio + 7) = LE32(1 << PIN_WR);
@@ -534,7 +520,6 @@ static void ps_write_8_int(unsigned int address, unsigned int data)
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 7) = LE32(((0x0100 | ((address >> 16) & 0x00ff)) << 8) | (REG_ADDR_HI << PIN_A0));
-    GPIO_SETTLE();
     if (tmp > 20000000)
     {
         *(gpio + 7) = LE32(1 << PIN_WR);
@@ -554,7 +539,6 @@ static void ps_write_8_int(unsigned int address, unsigned int data)
     *(gpio + 1) = LE32(INPUT[1]);
     *(gpio + 2) = LE32(INPUT[2]);
 
-    while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
     while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {}
 }
 
@@ -599,7 +583,6 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
         *(gpio + 2) = LE32(OUTPUT[2]);
 
         *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
-        GPIO_SETTLE();
         if (tmp > 20000000)
         {
             *(gpio + 7) = LE32(1 << PIN_WR);
@@ -616,7 +599,6 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
         *(gpio + 10) = LE32(CLEAR_BITS);
 
         *(gpio + 7) = LE32(((0x0200 | ((address >> 16) & 0x00ff)) << 8) | (REG_ADDR_HI << PIN_A0));
-        GPIO_SETTLE();
         if (tmp > 20000000)
         {
             *(gpio + 7) = LE32(1 << PIN_WR);
@@ -637,7 +619,6 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
         *(gpio + 2) = LE32(INPUT[2]);
 
         *(gpio + 7) = LE32(REG_DATA << PIN_A0);
-        GPIO_SETTLE();
         *(gpio + 7) = LE32(1 << PIN_RD);
         if (tmp > 20000000)
         {
@@ -646,9 +627,6 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
             *(gpio + 7) = LE32(1 << PIN_RD);
         }
 
-        /* Two-phase TXN wait: first wait for FPGA to assert TXN (started),
-           then wait for TXN deassert (data ready) */
-        while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
         while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
         unsigned int value = LE32(*(gpio + 13));
 
@@ -684,7 +662,6 @@ unsigned int ps_read_8_int(unsigned int address)
     *(gpio + 2) = LE32(OUTPUT[2]);
 
     *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
-    GPIO_SETTLE();
     if (tmp > 20000000)
     {
         *(gpio + 7) = LE32(1 << PIN_WR);
@@ -701,7 +678,6 @@ unsigned int ps_read_8_int(unsigned int address)
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 7) = LE32(((0x0300 | ((address >> 16) & 0x00ff)) << 8) | (REG_ADDR_HI << PIN_A0));
-    GPIO_SETTLE();
     if (tmp > 20000000)
     {
         *(gpio + 7) = LE32(1 << PIN_WR);
@@ -722,7 +698,6 @@ unsigned int ps_read_8_int(unsigned int address)
     *(gpio + 2) = LE32(INPUT[2]);
 
     *(gpio + 7) = LE32(REG_DATA << PIN_A0);
-    GPIO_SETTLE();
     *(gpio + 7) = LE32(1 << PIN_RD);
     if (tmp > 20000000)
     {
@@ -731,7 +706,6 @@ unsigned int ps_read_8_int(unsigned int address)
         *(gpio + 7) = LE32(1 << PIN_RD);
     }
 
-    while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
     while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
     unsigned int value = LE32(*(gpio + 13));
 

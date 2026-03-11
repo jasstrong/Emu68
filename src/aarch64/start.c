@@ -2140,9 +2140,15 @@ void M68K_StartEmu(void *addr, void *fdt)
     (void)fdt;
 
 #ifdef MAC68K
-    /* Read reset vectors from ROM via bus (OVL already disabled, ROM at 0x400000) */
-    __m68k.ISP.u32 = ps_read_32(0x400000);
-    __m68k.PC = ps_read_32(0x400004);
+    /* Read reset vectors from Pi RAM copy of ROM.
+       Invalidate cache lines first since ROM was written via uncached mapping
+       but mmu_map created a cached mapping over it. */
+    asm volatile("dc ivac, %0" :: "r"((uintptr_t)0x400000) : "memory");
+    asm volatile("dc ivac, %0" :: "r"((uintptr_t)0x400040) : "memory");
+    asm volatile("dsb sy; isb" ::: "memory");
+    __m68k.ISP.u32 = BE32(*(volatile uint32_t *)(uintptr_t)0x400000);
+    __m68k.PC = BE32(*(volatile uint32_t *)(uintptr_t)0x400004);
+    kprintf("[BOOT] Reset vectors from Pi RAM: ISP=%08x PC=%08x\n", __m68k.ISP.u32, __m68k.PC);
     (void)addr;
 #else
     asm volatile("mov %0, #0":"=r"(addr));
