@@ -1086,9 +1086,29 @@ void bus_task(void)
     else
         asm volatile("msr CNTKCTL_EL1, %0" :: "r"(3 | (1 << 2) | (3 << 8) | (2 << 4)));
 
+    /* Diagnostic: verify GPIO reads work from core 3 */
+    {
+        unsigned int sr = ps_read_status_reg();
+        uint32_t gplev = LE32(*(gpio + 13));
+        kprintf("[BUS] Core 3 GPIO test: status reg = %04x, GPLEV0 = %08x, TXN=%d\n",
+                sr, gplev, (gplev >> PIN_TXN_IN_PROGRESS) & 1);
+
+        /* If TXN_IN_PROGRESS is stuck high, wait for it to clear */
+        if (gplev & (1 << PIN_TXN_IN_PROGRESS)) {
+            kprintf("[BUS] WARNING: TXN_IN_PROGRESS stuck high, waiting...\n");
+            uint32_t timeout = 10000000;
+            while ((LE32(*(gpio + 13)) & (1 << PIN_TXN_IN_PROGRESS)) && --timeout) {}
+            if (!timeout)
+                kprintf("[BUS] TXN_IN_PROGRESS did not clear!\n");
+            else
+                kprintf("[BUS] TXN_IN_PROGRESS cleared after %u iterations\n", 10000000 - timeout);
+        }
+    }
+
     kprintf("[BUS] Bus controller activated on core 3\n");
     bus_task_ready = 1;
     asm volatile("dmb sy" ::: "memory");
+    asm volatile("sev");
 
     uint32_t bus_task_debug_count = 0;
 

@@ -395,6 +395,9 @@ asm(
 
 volatile uint64_t temp_stack;
 volatile uint8_t boot_lock;
+#ifdef MAC68K
+volatile uint8_t core0_init_done;
+#endif
 
 void serial_writer();
 
@@ -449,6 +452,9 @@ void secondary_boot(void)
     (void)async_log;
     if (cpu_id == 3)
     {
+        /* Wait until core 0 finishes all init (display, ROM loading, IRQ setup) */
+        extern volatile uint8_t core0_init_done;
+        while (!core0_init_done) { asm volatile("wfe"); }
         wb_init();
         wb_task();
     }
@@ -1538,6 +1544,11 @@ void boot(void *dtree)
         mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
     }
 #else
+    /* Signal core 3 that all init is complete — it can start the bus controller now */
+    core0_init_done = 1;
+    asm volatile("dmb sy" ::: "memory");
+    asm volatile("sev");
+
     kprintf("[BOOT] Mac68k - waiting for bus controller on core 3\n");
     while (!bus_task_ready) { asm volatile("wfe"); }
     kprintf("[BOOT] Mac68k - starting emulation\n");
@@ -2108,12 +2119,12 @@ void M68K_StartEmu(void *addr, void *fdt)
 
     cache_setup();
 
-    M68K_InitializeCache();
-
     bzero(&__m68k, sizeof(__m68k));
     //bzero((void *)4, 1020);
 
     __m68k_state = &__m68k;
+
+    M68K_InitializeCache();
 
     //*(uint32_t*)4 = 0;
 
