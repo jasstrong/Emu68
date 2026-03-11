@@ -1536,28 +1536,12 @@ void boot(void *dtree)
     kprintf("[BOOT] Mac68k - ROM copied. First words: %08x %08x\n",
             *(volatile uint32_t *)(uintptr_t)0x400000, *(volatile uint32_t *)(uintptr_t)0x400004);
 
-    /* Verify ROM copy BEFORE mmu_map (both paths uncached).
-       Reset FPGA state machine first — it may be desynchronized after 131K reads. */
+    /* Reset FPGA state machine after ROM copy burst, warm up */
     ps_reset_state_machine();
     {
         unsigned int d;
         for (int i = 0; i < 3; i++) d = ps_read_16(0);
         (void)d;
-    }
-    {
-        int errors = 0;
-        for (int i = 0; i < 262144; i += 2)
-        {
-            uint16_t bus_val = ps_read_16(i);  /* OVL active: address 0 = ROM */
-            uint16_t ram_val = *(volatile uint16_t *)((uintptr_t)0x400000 + i);
-            if (bus_val != ram_val)
-            {
-                if (errors < 10)
-                    kprintf("[ROMCHK] +%05x: bus=%04x ram=%04x\n", i, bus_val, ram_val);
-                errors++;
-            }
-        }
-        kprintf("[ROMCHK] %d mismatches / %d words\n", errors, 262144/2);
     }
 
     /* Map ROM at 0x400000 so JIT code (EL0) reads directly from Pi RAM */
