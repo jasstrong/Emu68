@@ -1497,7 +1497,6 @@ void boot(void *dtree)
 
     //dt_dump_tree();
 
-#ifdef PISTORM
 #ifndef MAC68K
     //amiga_checksum((void*)0xffffff9000e00000, 524288, 524288-24, 1);
     if (recalc_checksum)
