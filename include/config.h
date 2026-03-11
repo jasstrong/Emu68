@@ -58,8 +58,8 @@
 
 #ifdef MAC68K
 
-#define PISTORM_BITBANG_DELAY       21
-#define PISTORM_CHIPSET_DELAY       0
+#define PISTORM_BITBANG_DELAY       42
+#define PISTORM_CHIPSET_DELAY       24
 #define PISTORM_CIA_DELAY           0
 #define PISTORM_WRITE_BUFFER        0
 #define PISTORM_WRITE_BUFFER_SIZE   0
