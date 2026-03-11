@@ -467,6 +467,8 @@ static void ps_write_16_int(unsigned int address, unsigned int data)
         *(gpio + 1) = LE32(INPUT[1]);
         *(gpio + 2) = LE32(INPUT[2]);
 
+        /* Two-phase TXN wait for writes too */
+        while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
         while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {}
     }
 }
@@ -539,6 +541,7 @@ static void ps_write_8_int(unsigned int address, unsigned int data)
     *(gpio + 1) = LE32(INPUT[1]);
     *(gpio + 2) = LE32(INPUT[2]);
 
+    while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
     while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {}
 }
 
@@ -627,6 +630,9 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
             *(gpio + 7) = LE32(1 << PIN_RD);
         }
 
+        /* Two-phase TXN wait: first wait for FPGA to assert TXN (started),
+           then wait for TXN deassert (data ready) */
+        while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
         while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
         unsigned int value = LE32(*(gpio + 13));
 
@@ -706,6 +712,7 @@ unsigned int ps_read_8_int(unsigned int address)
         *(gpio + 7) = LE32(1 << PIN_RD);
     }
 
+    while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
     while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
     unsigned int value = LE32(*(gpio + 13));
 
