@@ -1433,11 +1433,27 @@ void boot(void *dtree)
         tlsf_free(tlsf, initramfs_loc);
     }
 #else
-    /* Mac68k: no local ROM caching in Phase 1 — all reads go through PiStorm */
-    if (initramfs_loc != NULL)
+    /* Mac68k: map PDS expansion ROM at 0xF80000 if provided via initramfs */
+    if (initramfs_loc != NULL && initramfs_size != 0)
     {
-        kprintf("[BOOT] Mac68k mode - ROM reads via PiStorm\n");
+        kprintf("[BOOT] Mac68k - loading PDS ROM from %p, size %d\n", initramfs_loc, initramfs_size);
+
+        /* Map 64K at 0xF80000 for the PDS card ROM (read-only, cached) */
+        mmu_map(0xf80000, 0xf80000, 0x10000,
+                MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+
+        /* Copy ROM data into the mapped region */
+        DuffCopy((void*)0xffffff9000f80000, initramfs_loc, initramfs_size / 4);
+
+        kprintf("[BOOT] Mac68k - PDS ROM mapped at 0xF80000, sig=%04x %04x\n",
+                *(uint16_t*)0xffffff9000f80000,
+                *(uint16_t*)0xffffff9000f80002);
+
         tlsf_free(tlsf, initramfs_loc);
+    }
+    else
+    {
+        kprintf("[BOOT] Mac68k mode - no PDS ROM, all reads via PiStorm\n");
     }
 #endif
 
