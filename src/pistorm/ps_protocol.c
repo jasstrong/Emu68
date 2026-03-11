@@ -605,22 +605,24 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
 
         *(gpio + 7) = LE32(REG_DATA << PIN_A0);
         *(gpio + 7) = LE32(1 << PIN_RD);
-        if (tmp > 20000000)
-        {
-            *(gpio + 7) = LE32(1 << PIN_RD);
-            *(gpio + 7) = LE32(1 << PIN_RD);
-            *(gpio + 7) = LE32(1 << PIN_RD);
-        }
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
 
+        /* Two-phase TXN wait: first wait for FPGA to START (TXN HIGH),
+           then wait for cycle to COMPLETE (TXN LOW).
+           Without phase 1, a fast core can check TXN before the FPGA
+           has reacted to RD, see LOW, and fall through with garbage. */
         {
             uint32_t timeout = 1000000;
-            while ((*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) && --timeout) {}
+            while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) && --timeout) {}
             if (!timeout) {
-                kprintf("[BUS] READ TIMEOUT addr=%06x GPLEV0=%08x\n", address, LE32(*(gpio + 13)));
+                kprintf("[BUS] TXN NEVER ASSERTED addr=%06x GPLEV0=%08x\n", address, LE32(*(gpio + 13)));
                 *(gpio + 10) = LE32(CLEAR_BITS);
                 return 0xffff;
             }
         }
+        while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
         unsigned int value = LE32(*(gpio + 13));
 
         *(gpio + 10) = LE32(CLEAR_BITS);
@@ -692,13 +694,12 @@ unsigned int ps_read_8_int(unsigned int address)
 
     *(gpio + 7) = LE32(REG_DATA << PIN_A0);
     *(gpio + 7) = LE32(1 << PIN_RD);
-    if (tmp > 20000000)
-    {
-        *(gpio + 7) = LE32(1 << PIN_RD);
-        *(gpio + 7) = LE32(1 << PIN_RD);
-        *(gpio + 7) = LE32(1 << PIN_RD);
-    }
+    *(gpio + 7) = LE32(1 << PIN_RD);
+    *(gpio + 7) = LE32(1 << PIN_RD);
+    *(gpio + 7) = LE32(1 << PIN_RD);
 
+    /* Two-phase TXN wait (see ps_read_16_int_nowbwait) */
+    while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
     while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
     unsigned int value = LE32(*(gpio + 13));
 
@@ -1104,6 +1105,9 @@ void bus_task(void)
                 kprintf("[BUS] TXN_IN_PROGRESS cleared after %u iterations\n", 10000000 - timeout);
         }
     }
+
+    /* Reset FPGA state machine before starting bus operations */
+    ps_reset_state_machine();
 
     kprintf("[BUS] Bus controller activated on core 3\n");
     bus_task_ready = 1;
