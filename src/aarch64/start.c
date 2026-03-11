@@ -1536,14 +1536,6 @@ void boot(void *dtree)
     kprintf("[BOOT] Mac68k - ROM copied. First words: %08x %08x\n",
             *(volatile uint32_t *)(uintptr_t)0x400000, *(volatile uint32_t *)(uintptr_t)0x400004);
 
-    /* Reset FPGA state machine after ROM copy burst, warm up */
-    ps_reset_state_machine();
-    {
-        unsigned int d;
-        for (int i = 0; i < 3; i++) d = ps_read_16(0);
-        (void)d;
-    }
-
     /* Map ROM at 0x400000 so JIT code (EL0) reads directly from Pi RAM */
     mmu_map(0x400000, 0x400000, 262144,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
