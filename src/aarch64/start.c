@@ -1433,27 +1433,19 @@ void boot(void *dtree)
         tlsf_free(tlsf, initramfs_loc);
     }
 #else
-    /* Mac68k: map PDS expansion ROM at 0xF80000 if provided via initramfs */
+    /* Mac68k Phase 1: skip PDS ROM mapping for now.
+       The Radius ROM entry point (0xC80094) requires physical hardware.
+       Without it, the Mac ROM jumps to garbage and crashes.
+       Let reads from 0xF80000 go to the real bus so the signature check
+       fails and the Mac ROM continues to normal boot. */
     if (initramfs_loc != NULL && initramfs_size != 0)
     {
-        kprintf("[BOOT] Mac68k - loading PDS ROM from %p, size %d\n", initramfs_loc, initramfs_size);
-
-        /* Map 64K at 0xF80000 for the PDS card ROM (read-only, cached) */
-        mmu_map(0xf80000, 0xf80000, 0x10000,
-                MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
-
-        /* Copy ROM data into the mapped region */
-        DuffCopy((void*)0xffffff9000f80000, initramfs_loc, initramfs_size / 4);
-
-        kprintf("[BOOT] Mac68k - PDS ROM mapped at 0xF80000, sig=%04x %04x\n",
-                *(uint16_t*)0xffffff9000f80000,
-                *(uint16_t*)0xffffff9000f80002);
-
+        kprintf("[BOOT] Mac68k - PDS ROM available (%d bytes) but NOT mapped (Phase 1)\n", initramfs_size);
         tlsf_free(tlsf, initramfs_loc);
     }
     else
     {
-        kprintf("[BOOT] Mac68k mode - no PDS ROM, all reads via PiStorm\n");
+        kprintf("[BOOT] Mac68k mode - no PDS ROM provided\n");
     }
 #endif
 
