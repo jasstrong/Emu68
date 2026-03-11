@@ -992,6 +992,7 @@ volatile uint8_t bus_task_ready;
 
 void bus_init(void)
 {
+    kprintf("[BUS] Initializing bus controller FIFO\n");
     bus_fifo = tlsf_malloc(tlsf, sizeof(struct BusRequest) * BUS_FIFO_SIZE);
     bus_head = bus_tail = 0;
     bus_reply_ready = 0;

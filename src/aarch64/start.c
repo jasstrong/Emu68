@@ -1538,6 +1538,8 @@ void boot(void *dtree)
         mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
     }
 #else
+    kprintf("[BOOT] Mac68k - waiting for bus controller on core 3\n");
+    while (!bus_task_ready) { asm volatile("wfe"); }
     kprintf("[BOOT] Mac68k - starting emulation\n");
 #endif
 
