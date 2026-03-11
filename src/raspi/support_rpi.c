@@ -17,6 +17,9 @@
 
 #ifdef PISTORM
 #include "ps_protocol.h"
+#ifdef MAC68K
+extern void put_char(uint8_t c);
+#endif
 #endif
 
 static int serial_up = 0;
@@ -57,6 +60,10 @@ int fast_serial = 0;
 void putByte(void *io_base, char chr)
 {
     (void)io_base;
+
+#ifdef MAC68K
+    put_char((uint8_t)chr);
+#endif
 
     if (redirect)
     {
