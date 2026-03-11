@@ -327,6 +327,8 @@ static void setup_gpclk() {
     SET_GPIO_ALT(PIN_CLK, 0);  // gpclk0
 }
 
+static unsigned int ps_read_16_int_nowbwait(unsigned int address);
+
 void ps_setup_protocol() {
     uint64_t clock;
     uint64_t delay;
@@ -391,7 +393,6 @@ void ps_setup_protocol() {
 }
 
 static void ps_write_8_int(unsigned int address, unsigned int data);
-static unsigned int ps_read_16_int_nowbwait(unsigned int address);
 
 static void ps_write_16_int(unsigned int address, unsigned int data)
 {
