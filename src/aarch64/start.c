@@ -2140,23 +2140,15 @@ void M68K_StartEmu(void *addr, void *fdt)
     (void)fdt;
 
 #ifdef MAC68K
-    /* Read reset vectors from the uncached kernel mapping of Pi RAM.
-       The ROM was written via the uncached 1:1 boot mapping, then
-       mmu_map created a cached EL0 mapping at 0x400000. Read through
-       the kernel mapping (0xffffff9000400000) which is uncached at
-       this point to avoid stale cache issues. */
-    {
-        volatile uint32_t *rom_uncached = (volatile uint32_t *)0xffffff9000400000ULL;
-        __m68k.ISP.u32 = BE32(rom_uncached[0]);
-        __m68k.PC = BE32(rom_uncached[1]);
-    }
-    kprintf("[BOOT] Reset vectors from Pi RAM: ISP=%08x PC=%08x\n", __m68k.ISP.u32, __m68k.PC);
-    (void)addr;
+    /* Read reset vectors from Pi RAM at 0x400000 (cache is cold after
+       uncached writes + dsb, so first read fetches from DRAM) */
+    asm volatile("mov %0, #0x400000":"=r"(addr));
 #else
     asm volatile("mov %0, #0":"=r"(addr));
+#endif
     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
     __m68k.PC = BE32(*((uint32_t*)addr+1));
-#endif
+    kprintf("[BOOT] Reset vectors: ISP=%08x PC=%08x\n", __m68k.ISP.u32, __m68k.PC);
     __m68k.SR = BE16(SR_S | SR_IPL);
     __m68k.FPCR = 0;
     __m68k.JIT_CACHE_TOTAL = tlsf_get_total_size(jit_tlsf);
