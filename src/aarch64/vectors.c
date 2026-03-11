@@ -156,9 +156,8 @@ void  __attribute__((used)) __stub_vectors()
 "       strb w0, [x1, #%[pint]]         \n"
 "1:                                     \n"
 #else
-"       mrs x1, TPIDRRO_EL0             \n" // Mac: unconditionally deliver IRQ — VIA handles masking
-"       mov w0, #1                      \n" // Set level 1 IRQ
-"       strb w0, [x1, #%[pint]]         \n"
+       /* Bus controller sets INT.IPL directly on core 3.
+          Timer IRQ just breaks JIT blocks via SPSR masking above. */
 #endif
 "       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
 "       eret                            \n"
@@ -183,9 +182,8 @@ void  __attribute__((used)) __stub_vectors()
 "       strb w0, [x1, #%[pint]]         \n"
 "1:                                     \n"
 #else
-"       mrs x1, TPIDRRO_EL0             \n" // Mac: unconditionally deliver IRQ — VIA handles masking
-"       mov w0, #1                      \n" // Set level 1 IRQ
-"       strb w0, [x1, #%[pint]]         \n"
+       /* Bus controller sets INT.IPL directly on core 3.
+          Timer FIQ just breaks JIT blocks via SPSR masking above. */
 #endif
 "       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
 "       eret                            \n"

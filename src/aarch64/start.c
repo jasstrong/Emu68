@@ -445,6 +445,15 @@ void secondary_boot(void)
     __atomic_clear(&boot_lock, __ATOMIC_RELEASE);
 
 #ifdef PISTORM
+#ifdef MAC68K
+    (void)async_log;
+    if (cpu_id == 3)
+    {
+        wb_init();
+        wb_task();
+    }
+    /* cores 1, 2 fall through to wfe loop */
+#else
     if (cpu_id == 1)
     {
         if (async_log)
@@ -459,6 +468,7 @@ void secondary_boot(void)
         wb_init();
         wb_task();
     }
+#endif /* MAC68K */
 #else
     (void)async_log;
 #endif
@@ -1931,8 +1941,8 @@ void  __attribute__((used)) stub_ExecutionLoop()
 "       cbz     w1, 998f                    \n" // IPL in that case
 "992:                                       \n"
 
-// No need to do anything on PiStorm32 - the w1 contains the IPL value already (see few lines above)
-#ifndef PISTORM32
+// No need to do anything on PiStorm32 or MAC68K - the w1 contains the IPL value already (see few lines above)
+#if !defined(PISTORM32) && !defined(MAC68K)
 
 #if PISTORM_WRITE_BUFFER
 "       adrp    x5, bus_lock                \n"
