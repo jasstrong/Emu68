@@ -1547,6 +1547,28 @@ void boot(void *dtree)
     }
     kprintf("[BOOT] Mac68k - OVL disabled, ROM at 0x400000, RAM at 0x000000\n");
 
+    /* Verify ROM copy: re-read from bus and compare with Pi RAM */
+    {
+        int errors = 0;
+        int first_err_offset = -1;
+        for (int i = 0; i < 262144; i += 2)
+        {
+            uint16_t bus_val = ps_read_16(0x400000 + i);
+            uint16_t ram_val = *(volatile uint16_t *)((uintptr_t)0x400000 + i);
+            if (bus_val != ram_val && errors < 10)
+            {
+                kprintf("[ROMCHK] Mismatch at +%05x: bus=%04x ram=%04x\n", i, bus_val, ram_val);
+                if (first_err_offset < 0) first_err_offset = i;
+                errors++;
+            }
+            else if (bus_val != ram_val)
+            {
+                errors++;
+            }
+        }
+        kprintf("[ROMCHK] Verification complete: %d mismatches out of %d words\n", errors, 262144/2);
+    }
+
     kprintf("[BOOT] Mac68k - starting emulation\n");
 #endif
 
