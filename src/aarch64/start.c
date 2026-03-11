@@ -2138,10 +2138,12 @@ void M68K_StartEmu(void *addr, void *fdt)
     (void)fdt;
 
 #ifdef MAC68K
+    (void)addr;
     /* MAC68K: no local ROM — read 68K reset vectors from the Mac SE bus */
     {
         /* Show what Pi RAM had at address 0 (what was being used before) */
-        volatile uint32_t *piram = (volatile uint32_t *)0;
+        volatile uint32_t *piram;
+        asm volatile("mov %0, #0" : "=r"(piram));
         kprintf("[BOOT] Pi RAM @0: %08x %08x (was used as SSP/PC!)\n", piram[0], piram[1]);
     }
     __m68k.ISP.u32 = BE32(ps_read_32(0));
