@@ -61,6 +61,11 @@ void putByte(void *io_base, char chr)
 {
     (void)io_base;
 
+#ifdef MAC68K
+    put_char((uint8_t)chr);
+    return;
+#endif
+
     if (redirect)
     {
         if (chr == '\n')
