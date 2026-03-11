@@ -1008,14 +1008,8 @@ void bus_init(void)
     bus_task_ready = 0;
 }
 
-static uint32_t bus_debug_count = 0;
-
 static void bus_push_write(uint32_t addr, uint32_t value, uint8_t size)
 {
-    if (bus_debug_count < 20) {
-        kprintf("[BUS] W%d %06x <- %x\n", size, addr, value);
-        bus_debug_count++;
-    }
 
     /* Wait if FIFO is full */
     while (bus_tail + BUS_FIFO_SIZE <= bus_head)
@@ -1036,11 +1030,6 @@ static void bus_push_write(uint32_t addr, uint32_t value, uint8_t size)
 
 static uint32_t bus_push_read(uint32_t addr, uint8_t size)
 {
-    if (bus_debug_count < 20) {
-        kprintf("[BUS] R%d %06x\n", size, addr);
-        bus_debug_count++;
-    }
-
     /* Wait if FIFO is full */
     while (bus_tail + BUS_FIFO_SIZE <= bus_head)
         asm volatile("yield");
@@ -1119,15 +1108,14 @@ void bus_task(void)
         }
     }
 
-    /* Write-read-verify test: write 0xA55A to RAM at 0x100, read back */
+    /* Write-read-verify test at 0x100000 (1MB, above ROM overlay) */
     {
-        kprintf("[BUS] Write test: writing 0xA55A to 0x000100\n");
-        ps_write_16_int(0x000100, 0xA55A);
-        unsigned int rb = ps_read_16_int_nowbwait(0x000100);
-        kprintf("[BUS] Write test: read back 0x%04x (expected 0xA55A) %s\n",
+        unsigned int orig = ps_read_16_int_nowbwait(0x100000);
+        ps_write_16_int(0x100000, 0xA55A);
+        unsigned int rb = ps_read_16_int_nowbwait(0x100000);
+        kprintf("[BUS] WR test @1MB: wrote A55A read %04x %s\n",
                 rb, rb == 0xA55A ? "OK" : "FAIL");
-        /* Restore */
-        ps_write_16_int(0x000100, 0x0000);
+        ps_write_16_int(0x100000, orig);
     }
 
     kprintf("[BUS] Bus controller activated on core 3\n");
@@ -1136,7 +1124,6 @@ void bus_task(void)
     asm volatile("sev");
     kprintf("[BUS] bus_task_ready set to %d\n", bus_task_ready);
 
-    uint32_t bus_task_debug_count = 0;
     uint32_t bus_task_total = 0;
     uint32_t bus_task_reads = 0;
     uint32_t bus_task_writes = 0;
@@ -1151,14 +1138,13 @@ void bus_task(void)
             if (req.type == BUS_TYPE_WRITE) bus_task_writes++;
             else bus_task_reads++;
 
-            if (bus_task_debug_count < 40) {
-                kprintf("[BUS3] %c%d %06x\n", req.type ? 'R' : 'W', req.size, req.addr);
-                bus_task_debug_count++;
+            /* Log first write, and periodic heartbeat */
+            if (req.type == BUS_TYPE_WRITE && bus_task_writes == 1) {
+                kprintf("[BUS3] 1st write: W%d %06x <- %x\n", req.size, req.addr, req.value);
             }
-            /* Periodic heartbeat */
-            if (bus_task_total == 1000 || bus_task_total == 10000 ||
+            if (bus_task_total == 100 || bus_task_total == 1000 || bus_task_total == 10000 ||
                 bus_task_total == 100000 || (bus_task_total % 1000000) == 0) {
-                kprintf("[BUS3] ops=%u R=%u W=%u\n", bus_task_total, bus_task_reads, bus_task_writes);
+                kprintf("[BUS3] %u ops R=%u W=%u\n", bus_task_total, bus_task_reads, bus_task_writes);
             }
 
             if (req.type == BUS_TYPE_WRITE) {
