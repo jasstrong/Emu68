@@ -1069,7 +1069,7 @@ static uint32_t bus_push_read(uint32_t addr, uint8_t size)
 
     /* Spin until core 3 posts the reply */
     while (!bus_reply_ready)
-        asm volatile("wfe");
+        asm volatile("yield");
 
     return bus_reply_value;
 }
@@ -1153,8 +1153,9 @@ void bus_task(void)
                     }
                 }
                 bus_reply_value = val;
-                asm volatile("dmb sy" ::: "memory");
+                asm volatile("dsb sy" ::: "memory");
                 bus_reply_ready = 1;
+                asm volatile("dsb sy" ::: "memory");
                 asm volatile("sev");
             }
 
