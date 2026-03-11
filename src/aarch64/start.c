@@ -1550,8 +1550,8 @@ void boot(void *dtree)
     asm volatile("sev");
 
     kprintf("[BOOT] Mac68k - waiting for bus controller on core 3\n");
-    while (!bus_task_ready) { asm volatile("wfe"); }
-    kprintf("[BOOT] Mac68k - starting emulation\n");
+    while (!bus_task_ready) { asm volatile("yield"); }
+    kprintf("[BOOT] Mac68k - bus_task_ready=%d, starting emulation\n", bus_task_ready);
 #endif
 
     M68K_StartEmu(0, NULL);
