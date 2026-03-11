@@ -118,10 +118,4 @@ void wb_push(uint32_t address, uint32_t value, uint8_t size);
 void ps_efinix_load(char* buffer, long length);
 void ps_efinix_setup();
 
-#ifdef MAC68K
-void bus_init(void);
-void bus_task(void);
-extern volatile uint8_t bus_task_ready;
-#endif
-
 #endif /* _PS_PROTOCOL_H */

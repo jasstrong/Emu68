@@ -605,23 +605,13 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
 
         *(gpio + 7) = LE32(REG_DATA << PIN_A0);
         *(gpio + 7) = LE32(1 << PIN_RD);
-        *(gpio + 7) = LE32(1 << PIN_RD);
-        *(gpio + 7) = LE32(1 << PIN_RD);
-        *(gpio + 7) = LE32(1 << PIN_RD);
-
-        /* Two-phase TXN wait: first wait for FPGA to START (TXN HIGH),
-           then wait for cycle to COMPLETE (TXN LOW).
-           Without phase 1, a fast core can check TXN before the FPGA
-           has reacted to RD, see LOW, and fall through with garbage. */
+        if (tmp > 20000000)
         {
-            uint32_t timeout = 1000000;
-            while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) && --timeout) {}
-            if (!timeout) {
-                kprintf("[BUS] TXN NEVER ASSERTED addr=%06x GPLEV0=%08x\n", address, LE32(*(gpio + 13)));
-                *(gpio + 10) = LE32(CLEAR_BITS);
-                return 0xffff;
-            }
+            *(gpio + 7) = LE32(1 << PIN_RD);
+            *(gpio + 7) = LE32(1 << PIN_RD);
+            *(gpio + 7) = LE32(1 << PIN_RD);
         }
+
         while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
         unsigned int value = LE32(*(gpio + 13));
 
@@ -694,12 +684,13 @@ unsigned int ps_read_8_int(unsigned int address)
 
     *(gpio + 7) = LE32(REG_DATA << PIN_A0);
     *(gpio + 7) = LE32(1 << PIN_RD);
-    *(gpio + 7) = LE32(1 << PIN_RD);
-    *(gpio + 7) = LE32(1 << PIN_RD);
-    *(gpio + 7) = LE32(1 << PIN_RD);
+    if (tmp > 20000000)
+    {
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
+    }
 
-    /* Two-phase TXN wait (see ps_read_16_int_nowbwait) */
-    while (!(*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS))) {}
     while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
     unsigned int value = LE32(*(gpio + 13));
 
@@ -832,16 +823,11 @@ unsigned int ps_get_ipl_zero()
 volatile int housekeeper_enabled = 0;
 extern struct M68KState *__m68k_state;
 
-void ps_housekeeper()
+void ps_housekeeper() 
 {
-#ifdef MAC68K
-    /* IPL polling and RESET checking moved to bus_task on core 3 */
-    while (1) asm volatile("wfe");
-#endif
-
     if (!gpio)
         gpio = ((volatile unsigned *)BCM2708_PERI_BASE) + GPIO_ADDR / 4;
-
+  
     extern uint64_t arm_cnt;
     uint64_t t0;
     uint64_t last_arm_cnt = arm_cnt;
@@ -969,259 +955,12 @@ void wb_waitfree()
 }
 #endif
 
-#ifdef MAC68K
-
-/*
- * Bus Controller — all GPIO access runs on core 3.
- * Core 0 communicates via lock-free FIFO (writes) and
- * a single reply slot (reads, one outstanding at a time).
- */
-
-#define BUS_FIFO_SIZE 32  /* must be power of 2 */
-
-#define BUS_TYPE_WRITE 0
-#define BUS_TYPE_READ  1
-
-struct BusRequest {
-    uint32_t addr;
-    uint32_t value;
-    uint8_t  size;   /* 1 or 2 */
-    uint8_t  type;   /* BUS_TYPE_WRITE or BUS_TYPE_READ */
-};
-
-static struct BusRequest *bus_fifo;
-static volatile uint32_t bus_head;  /* written by core 0 */
-static volatile uint32_t bus_tail;  /* written by core 3 */
-
-/* Read reply slot — only one outstanding read at a time */
-static volatile uint32_t bus_reply_value;
-static volatile uint8_t  bus_reply_ready;
-
-volatile uint8_t bus_task_ready;
-
-void bus_init(void)
-{
-    kprintf("[BUS] Initializing bus controller FIFO\n");
-    bus_fifo = tlsf_malloc(tlsf, sizeof(struct BusRequest) * BUS_FIFO_SIZE);
-    bus_head = bus_tail = 0;
-    bus_reply_ready = 0;
-    bus_task_ready = 0;
-}
-
-static void bus_push_write(uint32_t addr, uint32_t value, uint8_t size)
-{
-
-    /* Wait if FIFO is full */
-    while (bus_tail + BUS_FIFO_SIZE <= bus_head)
-        asm volatile("yield");
-
-    uint32_t idx = bus_head & (BUS_FIFO_SIZE - 1);
-    bus_fifo[idx].addr  = addr;
-    bus_fifo[idx].value = value;
-    bus_fifo[idx].size  = size;
-    bus_fifo[idx].type  = BUS_TYPE_WRITE;
-
-    asm volatile("dmb sy" ::: "memory");
-
-    __sync_add_and_fetch(&bus_head, 1);
-
-    asm volatile("sev");
-}
-
-static uint32_t bus_push_read(uint32_t addr, uint8_t size)
-{
-    /* Wait if FIFO is full */
-    while (bus_tail + BUS_FIFO_SIZE <= bus_head)
-        asm volatile("yield");
-
-    bus_reply_ready = 0;
-
-    uint32_t idx = bus_head & (BUS_FIFO_SIZE - 1);
-    bus_fifo[idx].addr  = addr;
-    bus_fifo[idx].value = 0;
-    bus_fifo[idx].size  = size;
-    bus_fifo[idx].type  = BUS_TYPE_READ;
-
-    asm volatile("dmb sy" ::: "memory");
-
-    __sync_add_and_fetch(&bus_head, 1);
-
-    asm volatile("sev");
-
-    /* Spin until core 3 posts the reply */
-    while (!bus_reply_ready)
-        asm volatile("yield");
-
-    return bus_reply_value;
-}
-
-static void __attribute__((unused)) bus_drain(void)
-{
-    while (bus_tail != bus_head)
-        asm volatile("yield");
-}
-
-void bus_task(void)
-{
-    if (!gpio)
-        gpio = ((volatile unsigned *)BCM2708_PERI_BASE) + GPIO_ADDR / 4;
-
-    /* Configure timer-based event stream for wfe wakeup (~300ns period).
-       Same setup as the former housekeeper on core 2. */
-    uint64_t tmp;
-    asm volatile("mrs %0, CNTFRQ_EL0" : "=r"(tmp));
-
-    if (tmp > 20000000)
-        asm volatile("msr CNTKCTL_EL1, %0" :: "r"(3 | (1 << 2) | (3 << 8) | (3 << 4)));
-    else
-        asm volatile("msr CNTKCTL_EL1, %0" :: "r"(3 | (1 << 2) | (3 << 8) | (2 << 4)));
-
-    /* Diagnostic: verify GPIO reads work from core 3 */
-    {
-        unsigned int sr = ps_read_status_reg();
-        uint32_t gplev = LE32(*(gpio + 13));
-        kprintf("[BUS] Core 3 GPIO test: status reg = %04x, GPLEV0 = %08x, TXN=%d\n",
-                sr, gplev, (gplev >> PIN_TXN_IN_PROGRESS) & 1);
-
-        /* If TXN_IN_PROGRESS is stuck high, wait for it to clear */
-        if (gplev & (1 << PIN_TXN_IN_PROGRESS)) {
-            kprintf("[BUS] WARNING: TXN_IN_PROGRESS stuck high, waiting...\n");
-            uint32_t timeout = 10000000;
-            while ((LE32(*(gpio + 13)) & (1 << PIN_TXN_IN_PROGRESS)) && --timeout) {}
-            if (!timeout)
-                kprintf("[BUS] TXN_IN_PROGRESS did not clear!\n");
-            else
-                kprintf("[BUS] TXN_IN_PROGRESS cleared after %u iterations\n", 10000000 - timeout);
-        }
-    }
-
-    /* Reset FPGA state machine before starting bus operations */
-    ps_reset_state_machine();
-
-    /* Warm-up: the first bus cycle after FPGA reset may not assert TXN.
-       Do a few dummy reads to prime the state machine, discard results. */
-    {
-        unsigned int d;
-        for (int i = 0; i < 3; i++) {
-            d = ps_read_16_int_nowbwait(0);
-            kprintf("[BUS] Warm-up read %d: %04x\n", i, d);
-        }
-    }
-
-    /* Write-read-verify test at 0x100000 (1MB, above ROM overlay) */
-    {
-        unsigned int orig = ps_read_16_int_nowbwait(0x100000);
-        ps_write_16_int(0x100000, 0xA55A);
-        unsigned int rb = ps_read_16_int_nowbwait(0x100000);
-        kprintf("[BUS] WR test @1MB: wrote A55A read %04x %s\n",
-                rb, rb == 0xA55A ? "OK" : "FAIL");
-        ps_write_16_int(0x100000, orig);
-    }
-
-    kprintf("[BUS] Bus controller activated on core 3\n");
-    bus_task_ready = 1;
-    asm volatile("dsb sy" ::: "memory");
-    asm volatile("sev");
-    kprintf("[BUS] bus_task_ready set to %d\n", bus_task_ready);
-
-    uint32_t bus_task_total = 0;
-    uint32_t bus_task_reads = 0;
-    uint32_t bus_task_writes = 0;
-
-    for (;;) {
-        /* 1. Process all pending FIFO requests */
-        while (bus_tail != bus_head) {
-            uint32_t idx = bus_tail & (BUS_FIFO_SIZE - 1);
-            struct BusRequest req = bus_fifo[idx];
-
-            bus_task_total++;
-            if (req.type == BUS_TYPE_WRITE) bus_task_writes++;
-            else bus_task_reads++;
-
-            /* Log first write, and periodic heartbeat */
-            if (req.type == BUS_TYPE_WRITE && bus_task_writes == 1) {
-                kprintf("[BUS3] 1st write: W%d %06x <- %x\n", req.size, req.addr, req.value);
-            }
-            if (bus_task_total == 100 || bus_task_total == 1000 || bus_task_total == 10000 ||
-                bus_task_total == 100000 || (bus_task_total % 1000000) == 0) {
-                kprintf("[BUS3] %u ops R=%u W=%u\n", bus_task_total, bus_task_reads, bus_task_writes);
-            }
-
-            if (req.type == BUS_TYPE_WRITE) {
-                switch (req.size) {
-                    case 1: ps_write_8_int(req.addr, req.value); break;
-                    case 2: ps_write_16_int(req.addr, req.value); break;
-                }
-            } else {
-                /* BUS_TYPE_READ */
-                uint32_t val;
-                if (req.size == 1) {
-                    val = ps_read_8_int(req.addr);
-                } else {
-                    /* size == 2: aligned uses direct GPIO, unaligned decomposes */
-                    if (req.addr & 1) {
-                        val = ps_read_8_int(req.addr) << 8;
-                        val |= ps_read_8_int(req.addr + 1);
-                    } else {
-                        val = ps_read_16_int_nowbwait(req.addr);
-                    }
-                }
-                bus_reply_value = val;
-                asm volatile("dsb sy" ::: "memory");
-                bus_reply_ready = 1;
-                asm volatile("dsb sy" ::: "memory");
-                asm volatile("sev");
-            }
-
-            __sync_add_and_fetch(&bus_tail, 1);
-        }
-
-        /* 2. Poll IPL pin */
-        if (housekeeper_enabled && __m68k_state) {
-            uint32_t pin = LE32(*(gpio + 13));
-
-            if (pin & (1 << PIN_IPL_ZERO)) {
-                __m68k_state->INT.IPL = 0;
-            } else {
-                /* IPL asserted — read 3-bit level from status register */
-                unsigned int sr = ps_read_status_reg();
-                uint8_t ipl = (sr & STATUS_MASK_IPL) >> STATUS_SHIFT_IPL;
-                __m68k_state->INT.IPL = ipl;
-                asm volatile("dmb sy" ::: "memory");
-                asm volatile("sev" ::: "memory");
-            }
-
-            /* 3. Check RESET pin */
-            if ((LE32(*(gpio + 13)) & (1 << PIN_RESET)) == 0) {
-                kprintf("[BUS] Bus controller will reset RasPi now...\n");
-
-                unsigned int r;
-                r = LE32(*PM_RSTS); r &= ~0xfffffaaa;
-                *PM_RSTS = LE32(PM_WDOG_MAGIC | r);
-                *PM_WDOG = LE32(PM_WDOG_MAGIC | 10);
-                *PM_RSTC = LE32(PM_WDOG_MAGIC | PM_RSTC_FULLRST);
-
-                while (1);
-            }
-        }
-
-        /* 4. Sleep if FIFO empty */
-        asm volatile("wfe");
-    }
-}
-
-#endif /* MAC68K */
-
 void wb_init()
 {
-#ifdef MAC68K
-    bus_init();
-#else
 #if PISTORM_WRITE_BUFFER
     wr_buffer = tlsf_malloc(tlsf, sizeof(struct WriteRequest) * WRITEBUFFER_SIZE);
     wr_head = wr_tail = 0;
     bus_lock = 0;
-#endif
 #endif
 }
 
@@ -1249,10 +988,6 @@ static inline void check_blit_active(unsigned int addr, unsigned int size)
 
 void wb_task()
 {
-#ifdef MAC68K
-    bus_task();
-    return;
-#endif
 #if PISTORM_WRITE_BUFFER
     kprintf("[WBACK] Write buffer activated\n");
 
@@ -1295,11 +1030,6 @@ void wb_task()
 
 void ps_write_8(unsigned int address, unsigned int data)
 {
-#ifdef MAC68K
-    bus_push_write(address, data, 1);
-    cache_invalidate_range(ICACHE, address, 1);
-    return;
-#endif
 #if PISTORM_WRITE_BUFFER
     if (address < 0xa00000)
     {
@@ -1327,11 +1057,6 @@ void ps_write_8(unsigned int address, unsigned int data)
 
 void ps_write_16(unsigned int address, unsigned int data)
 {
-#ifdef MAC68K
-    bus_push_write(address, data, 2);
-    cache_invalidate_range(ICACHE, address, 2);
-    return;
-#endif
 #if PISTORM_WRITE_BUFFER
     if (address < 0xa00000)
     {
@@ -1360,18 +1085,6 @@ void ps_write_16(unsigned int address, unsigned int data)
 
 void ps_write_32(unsigned int address, unsigned int data)
 {
-#ifdef MAC68K
-    if (address & 1) {
-        bus_push_write(address, data >> 24, 1);
-        bus_push_write(address + 1, data >> 8, 2);
-        bus_push_write(address + 3, data & 0xff, 1);
-    } else {
-        bus_push_write(address, data >> 16, 2);
-        bus_push_write(address + 2, data & 0xffff, 2);
-    }
-    cache_invalidate_range(ICACHE, address, 4);
-    return;
-#endif
 #if PISTORM_WRITE_BUFFER
     if (address < 0xa00000)
     {
@@ -1416,9 +1129,6 @@ void ps_write_128(unsigned int address, uint128_t data)
 
 unsigned int ps_read_8(unsigned int address)
 {
-#ifdef MAC68K
-    return bus_push_read(address, 1);
-#endif
     int val = ps_read_8_int(address);
 
 #if CIA_DELAY
@@ -1436,9 +1146,6 @@ unsigned int ps_read_8(unsigned int address)
 
 unsigned int ps_read_16(unsigned int address)
 {
-#ifdef MAC68K
-    return bus_push_read(address, 2);
-#endif
     int val = ps_read_16_int(address);
 #if CIA_DELAY
     if (address >= 0xbf0000 && address <= 0xbfffff) {
@@ -1455,21 +1162,6 @@ unsigned int ps_read_16(unsigned int address)
 
 unsigned int ps_read_32(unsigned int address)
 {
-#ifdef MAC68K
-    {
-        if (address & 1) {
-            unsigned int val;
-            val = bus_push_read(address, 1) << 24;
-            val |= bus_push_read(address + 1, 2) << 8;
-            val |= bus_push_read(address + 3, 1);
-            return val;
-        } else {
-            unsigned int a = bus_push_read(address, 2);
-            unsigned int b = bus_push_read(address + 2, 2);
-            return (a << 16) | b;
-        }
-    }
-#endif
     int val = ps_read_32_int(address);
 #if CIA_DELAY
     if (address >= 0xbf0000 && address <= 0xbfffff) {

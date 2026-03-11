@@ -395,9 +395,6 @@ asm(
 
 volatile uint64_t temp_stack;
 volatile uint8_t boot_lock;
-#ifdef MAC68K
-volatile uint8_t core0_init_done;
-#endif
 
 void serial_writer();
 
@@ -448,18 +445,6 @@ void secondary_boot(void)
     __atomic_clear(&boot_lock, __ATOMIC_RELEASE);
 
 #ifdef PISTORM
-#ifdef MAC68K
-    (void)async_log;
-    if (cpu_id == 3)
-    {
-        /* Wait until core 0 finishes all init (display, ROM loading, IRQ setup) */
-        extern volatile uint8_t core0_init_done;
-        while (!core0_init_done) { asm volatile("wfe"); }
-        wb_init();
-        wb_task();
-    }
-    /* cores 1, 2 fall through to wfe loop */
-#else
     if (cpu_id == 1)
     {
         if (async_log)
@@ -474,7 +459,6 @@ void secondary_boot(void)
         wb_init();
         wb_task();
     }
-#endif /* MAC68K */
 #else
     (void)async_log;
 #endif
@@ -1449,19 +1433,27 @@ void boot(void *dtree)
         tlsf_free(tlsf, initramfs_loc);
     }
 #else
-    /* Mac68k Phase 1: skip PDS ROM mapping for now.
-       The Radius ROM entry point (0xC80094) requires physical hardware.
-       Without it, the Mac ROM jumps to garbage and crashes.
-       Let reads from 0xF80000 go to the real bus so the signature check
-       fails and the Mac ROM continues to normal boot. */
+    /* Mac68k: map PDS expansion ROM at 0xF80000 if provided via initramfs */
     if (initramfs_loc != NULL && initramfs_size != 0)
     {
-        kprintf("[BOOT] Mac68k - PDS ROM available (%d bytes) but NOT mapped (Phase 1)\n", initramfs_size);
+        kprintf("[BOOT] Mac68k - loading PDS ROM from %p, size %d\n", initramfs_loc, initramfs_size);
+
+        /* Map 64K at 0xF80000 for the PDS card ROM (read-only, cached) */
+        mmu_map(0xf80000, 0xf80000, 0x10000,
+                MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+
+        /* Copy ROM data into the mapped region */
+        DuffCopy((void*)0xffffff9000f80000, initramfs_loc, initramfs_size / 4);
+
+        kprintf("[BOOT] Mac68k - PDS ROM mapped at 0xF80000, sig=%04x %04x\n",
+                *(uint16_t*)0xffffff9000f80000,
+                *(uint16_t*)0xffffff9000f80002);
+
         tlsf_free(tlsf, initramfs_loc);
     }
     else
     {
-        kprintf("[BOOT] Mac68k mode - no PDS ROM provided\n");
+        kprintf("[BOOT] Mac68k mode - no PDS ROM, all reads via PiStorm\n");
     }
 #endif
 
@@ -1536,24 +1528,7 @@ void boot(void *dtree)
         mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
     }
 #else
-    /* Signal core 3 that all init is complete — it can start the bus controller now */
-    core0_init_done = 1;
-    asm volatile("dmb sy" ::: "memory");
-    asm volatile("sev");
-
-    kprintf("[BOOT] Mac68k - waiting for bus controller on core 3\n");
-    {
-        uint32_t wait_count = 0;
-        while (!bus_task_ready) {
-            asm volatile("yield");
-            if (++wait_count == 50000000) {
-                asm volatile("dsb sy" ::: "memory");
-                kprintf("[BOOT] Still waiting, bus_task_ready=%d\n", bus_task_ready);
-                wait_count = 0;
-            }
-        }
-    }
-    kprintf("[BOOT] Mac68k - bus_task_ready=%d, starting emulation\n", bus_task_ready);
+    kprintf("[BOOT] Mac68k - starting emulation\n");
 #endif
 
     M68K_StartEmu(0, NULL);
@@ -1956,8 +1931,8 @@ void  __attribute__((used)) stub_ExecutionLoop()
 "       cbz     w1, 998f                    \n" // IPL in that case
 "992:                                       \n"
 
-// No need to do anything on PiStorm32 or MAC68K - the w1 contains the IPL value already (see few lines above)
-#if !defined(PISTORM32) && !defined(MAC68K)
+// No need to do anything on PiStorm32 - the w1 contains the IPL value already (see few lines above)
+#ifndef PISTORM32
 
 #if PISTORM_WRITE_BUFFER
 "       adrp    x5, bus_lock                \n"
@@ -2121,12 +2096,12 @@ void M68K_StartEmu(void *addr, void *fdt)
 
     cache_setup();
 
+    M68K_InitializeCache();
+
     bzero(&__m68k, sizeof(__m68k));
     //bzero((void *)4, 1020);
 
     __m68k_state = &__m68k;
-
-    M68K_InitializeCache();
 
     //*(uint32_t*)4 = 0;
 
@@ -2136,26 +2111,11 @@ void M68K_StartEmu(void *addr, void *fdt)
 
 #ifdef PISTORM
     (void)fdt;
-
-#ifdef MAC68K
-    (void)addr;
-    /* MAC68K: no local ROM — read 68K reset vectors from the Mac SE bus */
-    {
-        /* Show what Pi RAM had at address 0 (what was being used before) */
-        volatile uint32_t *piram;
-        asm volatile("mov %0, #0" : "=r"(piram));
-        kprintf("[BOOT] Pi RAM @0: %08x %08x (was used as SSP/PC!)\n", piram[0], piram[1]);
-    }
-    __m68k.ISP.u32 = BE32(ps_read_32(0));
-    __m68k.PC = BE32(ps_read_32(4));
-    kprintf("[BOOT] Reset vectors from bus: SSP=%08x PC=%08x\n",
-            BE32(__m68k.ISP.u32), BE32(__m68k.PC));
-#else
+    
     asm volatile("mov %0, #0":"=r"(addr));
 
     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
     __m68k.PC = BE32(*((uint32_t*)addr+1));
-#endif
     __m68k.SR = BE16(SR_S | SR_IPL);
     __m68k.FPCR = 0;
     __m68k.JIT_CACHE_TOTAL = tlsf_get_total_size(jit_tlsf);

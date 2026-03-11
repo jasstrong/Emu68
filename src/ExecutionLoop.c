@@ -164,12 +164,12 @@ void MainLoop()
                     level = 6;
                     ctx->INT.ARM = 0;
                 }
-#if defined(PISTORM32) || defined(MAC68K)
-                /* On PiStorm32/MAC68K IPL level is obtained by another CPU core from the GPIO directly */
+#ifdef PISTORM32
+                /* On PiStorm32 IPL level is obtained by second CPU core from the GPIO directly */
                 if (ctx->INT.IPL > level)
                 {
                     level = ctx->INT.IPL;
-                }
+                }    
 #else
                 /* On classic pistorm we need to obtain IPL from PiStorm status register */
                 if (ctx->INT.IPL)
