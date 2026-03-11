@@ -999,8 +999,15 @@ void bus_init(void)
     bus_task_ready = 0;
 }
 
+static uint32_t bus_debug_count = 0;
+
 static void bus_push_write(uint32_t addr, uint32_t value, uint8_t size)
 {
+    if (bus_debug_count < 20) {
+        kprintf("[BUS] W%d %06x <- %x\n", size, addr, value);
+        bus_debug_count++;
+    }
+
     /* Wait if FIFO is full */
     while (bus_tail + BUS_FIFO_SIZE <= bus_head)
         asm volatile("yield");
@@ -1020,6 +1027,11 @@ static void bus_push_write(uint32_t addr, uint32_t value, uint8_t size)
 
 static uint32_t bus_push_read(uint32_t addr, uint8_t size)
 {
+    if (bus_debug_count < 20) {
+        kprintf("[BUS] R%d %06x\n", size, addr);
+        bus_debug_count++;
+    }
+
     /* Wait if FIFO is full */
     while (bus_tail + BUS_FIFO_SIZE <= bus_head)
         asm volatile("yield");
@@ -1070,11 +1082,18 @@ void bus_task(void)
     bus_task_ready = 1;
     asm volatile("dmb sy" ::: "memory");
 
+    uint32_t bus_task_debug_count = 0;
+
     for (;;) {
         /* 1. Process all pending FIFO requests */
         while (bus_tail != bus_head) {
             uint32_t idx = bus_tail & (BUS_FIFO_SIZE - 1);
             struct BusRequest req = bus_fifo[idx];
+
+            if (bus_task_debug_count < 20) {
+                kprintf("[BUS3] %c%d %06x\n", req.type ? 'R' : 'W', req.size, req.addr);
+                bus_task_debug_count++;
+            }
 
             if (req.type == BUS_TYPE_WRITE) {
                 switch (req.size) {
