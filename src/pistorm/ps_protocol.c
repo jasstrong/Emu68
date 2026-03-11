@@ -375,9 +375,23 @@ void ps_setup_protocol() {
     *(gpio + 2) = LE32(INPUT[2]);
 
     *(gpio + 7) = LE32(TXD_BIT);
+
+#ifdef MAC68K
+    /* Reset FPGA state machine and do warm-up reads.
+       The first bus cycle after reset may not assert TXN. */
+    ps_reset_state_machine();
+    {
+        unsigned int d;
+        for (int i = 0; i < 3; i++) {
+            d = ps_read_16_int_nowbwait(0);
+            kprintf("[GPIO] Warm-up read %d: %04x\n", i, d);
+        }
+    }
+#endif
 }
 
 static void ps_write_8_int(unsigned int address, unsigned int data);
+static unsigned int ps_read_16_int_nowbwait(unsigned int address);
 
 static void ps_write_16_int(unsigned int address, unsigned int data)
 {

@@ -450,10 +450,12 @@ void secondary_boot(void)
         if (async_log)
             serial_writer();
     }
+#ifndef MAC68K
     else if (cpu_id == 2)
     {
         ps_housekeeper();
     }
+#endif
     else if (cpu_id == 3)
     {
         wb_init();
