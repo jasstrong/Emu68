@@ -542,12 +542,16 @@ static void ps_write_32_int(unsigned int address, unsigned int value)
     }
 }
 
+static uint32_t read16_trace_count = 0;
+
 static unsigned int ps_read_16_int_nowbwait(unsigned int address)
 {
     uint64_t tmp;
     asm volatile("mrs %0, CNTFRQ_EL0":"=r"(tmp));
 
     address &= 0xffffff;
+    int trace = (read16_trace_count < 3);
+    if (trace) read16_trace_count++;
 
 //    if (address > 0xffffff)
 //        return 0xffff;
@@ -563,10 +567,12 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
     }
     else
     {
+        if (trace) kprintf("[RD16] GPFSEL out: %08x %08x %08x\n", OUTPUT[0], OUTPUT[1], OUTPUT[2]);
         *(gpio + 0) = LE32(OUTPUT[0]);
         *(gpio + 1) = LE32(OUTPUT[1]);
         *(gpio + 2) = LE32(OUTPUT[2]);
 
+        if (trace) kprintf("[RD16] addr_lo WR\n");
         *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
         if (tmp > 20000000)
         {
@@ -599,6 +605,7 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
         }
         *(gpio + 10) = LE32(CLEAR_BITS);
 
+        if (trace) kprintf("[RD16] GPFSEL in, assert RD\n");
         *(gpio + 0) = LE32(INPUT[0]);
         *(gpio + 1) = LE32(INPUT[1]);
         *(gpio + 2) = LE32(INPUT[2]);
@@ -612,6 +619,7 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
             *(gpio + 7) = LE32(1 << PIN_RD);
         }
 
+        if (trace) kprintf("[RD16] wait TXN, GPLEV0=%08x\n", LE32(*(gpio + 13)));
         {
             uint32_t timeout = 1000000;
             while ((*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) && --timeout) {}
@@ -620,6 +628,7 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
                 *(gpio + 10) = LE32(CLEAR_BITS);
                 return 0xffff;
             }
+            if (trace) kprintf("[RD16] TXN done, timeout=%u\n", timeout);
         }
         unsigned int value = LE32(*(gpio + 13));
 
