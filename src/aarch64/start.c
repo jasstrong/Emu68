@@ -2140,14 +2140,16 @@ void M68K_StartEmu(void *addr, void *fdt)
     (void)fdt;
 
 #ifdef MAC68K
-    /* Read reset vectors from Pi RAM copy of ROM.
-       Invalidate cache lines first since ROM was written via uncached mapping
-       but mmu_map created a cached mapping over it. */
-    asm volatile("dc ivac, %0" :: "r"((uintptr_t)0x400000) : "memory");
-    asm volatile("dc ivac, %0" :: "r"((uintptr_t)0x400040) : "memory");
-    asm volatile("dsb sy; isb" ::: "memory");
-    __m68k.ISP.u32 = BE32(*(volatile uint32_t *)(uintptr_t)0x400000);
-    __m68k.PC = BE32(*(volatile uint32_t *)(uintptr_t)0x400004);
+    /* Read reset vectors from the uncached kernel mapping of Pi RAM.
+       The ROM was written via the uncached 1:1 boot mapping, then
+       mmu_map created a cached EL0 mapping at 0x400000. Read through
+       the kernel mapping (0xffffff9000400000) which is uncached at
+       this point to avoid stale cache issues. */
+    {
+        volatile uint32_t *rom_uncached = (volatile uint32_t *)0xffffff9000400000ULL;
+        __m68k.ISP.u32 = BE32(rom_uncached[0]);
+        __m68k.PC = BE32(rom_uncached[1]);
+    }
     kprintf("[BOOT] Reset vectors from Pi RAM: ISP=%08x PC=%08x\n", __m68k.ISP.u32, __m68k.PC);
     (void)addr;
 #else
