@@ -1119,6 +1119,17 @@ void bus_task(void)
         }
     }
 
+    /* Write-read-verify test: write 0xA55A to RAM at 0x100, read back */
+    {
+        kprintf("[BUS] Write test: writing 0xA55A to 0x000100\n");
+        ps_write_16_int(0x000100, 0xA55A);
+        unsigned int rb = ps_read_16_int_nowbwait(0x000100);
+        kprintf("[BUS] Write test: read back 0x%04x (expected 0xA55A) %s\n",
+                rb, rb == 0xA55A ? "OK" : "FAIL");
+        /* Restore */
+        ps_write_16_int(0x000100, 0x0000);
+    }
+
     kprintf("[BUS] Bus controller activated on core 3\n");
     bus_task_ready = 1;
     asm volatile("dsb sy" ::: "memory");
@@ -1126,6 +1137,9 @@ void bus_task(void)
     kprintf("[BUS] bus_task_ready set to %d\n", bus_task_ready);
 
     uint32_t bus_task_debug_count = 0;
+    uint32_t bus_task_total = 0;
+    uint32_t bus_task_reads = 0;
+    uint32_t bus_task_writes = 0;
 
     for (;;) {
         /* 1. Process all pending FIFO requests */
@@ -1133,9 +1147,18 @@ void bus_task(void)
             uint32_t idx = bus_tail & (BUS_FIFO_SIZE - 1);
             struct BusRequest req = bus_fifo[idx];
 
+            bus_task_total++;
+            if (req.type == BUS_TYPE_WRITE) bus_task_writes++;
+            else bus_task_reads++;
+
             if (bus_task_debug_count < 40) {
                 kprintf("[BUS3] %c%d %06x\n", req.type ? 'R' : 'W', req.size, req.addr);
                 bus_task_debug_count++;
+            }
+            /* Periodic heartbeat */
+            if (bus_task_total == 1000 || bus_task_total == 10000 ||
+                bus_task_total == 100000 || (bus_task_total % 1000000) == 0) {
+                kprintf("[BUS3] ops=%u R=%u W=%u\n", bus_task_total, bus_task_reads, bus_task_writes);
             }
 
             if (req.type == BUS_TYPE_WRITE) {
