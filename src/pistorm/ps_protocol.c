@@ -467,18 +467,7 @@ static void ps_write_16_int(unsigned int address, unsigned int data)
         *(gpio + 1) = LE32(INPUT[1]);
         *(gpio + 2) = LE32(INPUT[2]);
 
-        {
-            int timeout = 1000;
-            while ((*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) && --timeout) {}
-            if (timeout == 0)
-            {
-                /* FPGA desync on write — reset and retry */
-                *(gpio + 10) = LE32(CLEAR_BITS);
-                ps_reset_state_machine();
-                ps_write_16_int(address, data);
-                return;
-            }
-        }
+        while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {}
     }
 }
 
@@ -638,20 +627,7 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
             *(gpio + 7) = LE32(1 << PIN_RD);
         }
 
-        {
-            int timeout = 1000;
-            while ((*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) && --timeout) {}
-            if (timeout == 0)
-            {
-                /* FPGA desync — reset and retry */
-                *(gpio + 10) = LE32(CLEAR_BITS);
-                *(gpio + 0) = LE32(INPUT[0]);
-                *(gpio + 1) = LE32(INPUT[1]);
-                *(gpio + 2) = LE32(INPUT[2]);
-                ps_reset_state_machine();
-                return ps_read_16_int_nowbwait(address);
-            }
-        }
+        while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
         unsigned int value = LE32(*(gpio + 13));
 
         *(gpio + 10) = LE32(CLEAR_BITS);
