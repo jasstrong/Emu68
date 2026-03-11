@@ -317,9 +317,46 @@ int board_idx = 0;
 struct ExpansionBoard **board;
 uint32_t overlay = 1;
 
-/* Bring-up trace: log first N accesses so we can see if PiStorm is talking */
+/* Bring-up trace: buffer first N accesses, then dump to HDMI and halt */
+#include "M68k.h"
+
+struct mac68k_trace_entry {
+    uint32_t pc;
+    uint32_t addr;
+    uint32_t data;
+    uint8_t  size;
+    uint8_t  is_write;
+};
+
+#define MAC68K_TRACE_LIMIT 60
+static struct mac68k_trace_entry mac68k_trace[MAC68K_TRACE_LIMIT];
 static int mac68k_trace_count = 0;
-#define MAC68K_TRACE_LIMIT 40
+static int mac68k_trace_dumped = 0;
+
+static uint32_t mac68k_get_pc(void)
+{
+    struct M68KState *ctx;
+    asm volatile("mrs %0, TPIDRRO_EL0":"=r"(ctx));
+    return ctx ? ctx->PC : 0xDEAD;
+}
+
+static void mac68k_trace_dump(void)
+{
+    if (mac68k_trace_dumped) return;
+    mac68k_trace_dumped = 1;
+
+    kprintf("\n=== Mac68k bus trace (first %d accesses) ===\n", mac68k_trace_count);
+    for (int i = 0; i < mac68k_trace_count; i++) {
+        struct mac68k_trace_entry *e = &mac68k_trace[i];
+        kprintf("PC:%06x %c%d %06x %08x\n",
+            e->pc,
+            e->is_write ? 'W' : 'R',
+            e->size,
+            e->addr,
+            e->data);
+    }
+    kprintf("=== end trace ===\n");
+}
 
 int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
 {
@@ -337,8 +374,12 @@ int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
     }
 
     if (mac68k_trace_count < MAC68K_TRACE_LIMIT) {
-        kprintf("[MAC] W%d %06x <- %08x\n", size, (uint32_t)far, (uint32_t)value);
-        mac68k_trace_count++;
+        struct mac68k_trace_entry *e = &mac68k_trace[mac68k_trace_count++];
+        e->pc = mac68k_get_pc();
+        e->addr = (uint32_t)far;
+        e->data = (uint32_t)value;
+        e->size = size;
+        e->is_write = 1;
     }
 
     /* Pass everything through to PiStorm */
@@ -401,8 +442,14 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
     }
 
     if (mac68k_trace_count < MAC68K_TRACE_LIMIT) {
-        kprintf("[MAC] R%d %06x -> %08x\n", size, (uint32_t)far, (uint32_t)*value);
-        mac68k_trace_count++;
+        struct mac68k_trace_entry *e = &mac68k_trace[mac68k_trace_count++];
+        e->pc = mac68k_get_pc();
+        e->addr = (uint32_t)far;
+        e->data = (uint32_t)*value;
+        e->size = size;
+        e->is_write = 0;
+    } else if (!mac68k_trace_dumped) {
+        mac68k_trace_dump();
     }
 
     return 1;
