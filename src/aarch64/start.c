@@ -1525,18 +1525,16 @@ void boot(void *dtree)
     /* Mac68k: Copy ROM from the bus into Pi RAM.
        At reset the Mac's OVL (overlay) maps ROM at address 0.
        Read 256KB from there before any access >= 0x400000 disables it.
-       Store into Pi RAM at 0x400000 (standard ROM location) so the JIT
-       translator can read opcodes directly.  Also copy to address 0
-       so reset vector reads work. */
+       Write through the UNCACHED 1:1 mapping so DRAM is updated directly
+       (the JIT translator reads through the uncached boot mapping). */
     kprintf("[BOOT] Mac68k - copying 256KB ROM from bus (OVL active)...\n");
     for (int i = 0; i < 262144; i += 4)
     {
-        *(uint32_t *)(0xffffff9000400000 + i) = ps_read_32(i);
+        *(volatile uint32_t *)((uintptr_t)0x400000 + i) = ps_read_32(i);
     }
-    /* Copy ROM also to address 0 (reset vectors + overlay mirror) */
-    DuffCopy((void *)0xffffff9000000000, (void *)0xffffff9000400000, 262144 / 4);
+    asm volatile("dsb sy" ::: "memory");
     kprintf("[BOOT] Mac68k - ROM copied. First words: %08x %08x\n",
-            *(uint32_t *)0xffffff9000400000, *(uint32_t *)0xffffff9000400004);
+            *(volatile uint32_t *)(uintptr_t)0x400000, *(volatile uint32_t *)(uintptr_t)0x400004);
 
     /* Map ROM at 0x400000 so JIT code (EL0) reads directly from Pi RAM */
     mmu_map(0x400000, 0x400000, 262144,
@@ -2132,8 +2130,13 @@ void M68K_StartEmu(void *addr, void *fdt)
 
 #ifdef PISTORM
     (void)fdt;
-    
+
+#ifdef MAC68K
+    /* Read reset vectors from ROM at 0x400000 (already copied to Pi RAM) */
+    asm volatile("mov %0, #0x400000":"=r"(addr));
+#else
     asm volatile("mov %0, #0":"=r"(addr));
+#endif
 
     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
     __m68k.PC = BE32(*((uint32_t*)addr+1));
