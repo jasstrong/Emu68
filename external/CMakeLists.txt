@@ -34,4 +34,5 @@ set(LIBDEFLATE_USE_SHARED_LIB OFF CACHE BOOL
        of the static library")
 
 add_subdirectory(capstone EXCLUDE_FROM_ALL)
+target_compile_options(capstone-static PRIVATE -include inttypes.h)
 add_subdirectory(libdeflate EXCLUDE_FROM_ALL)
