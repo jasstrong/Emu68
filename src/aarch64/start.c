@@ -1525,16 +1525,25 @@ void boot(void *dtree)
     /* Mac68k: Copy ROM from the bus into Pi RAM.
        At reset the Mac's OVL (overlay) maps ROM at address 0.
        Read 256KB from there before any access >= 0x400000 disables it.
-       Write through the UNCACHED 1:1 mapping so DRAM is updated directly
-       (the JIT translator reads through the uncached boot mapping). */
+       Write through the CACHED kernel mapping (0xffffff9000400000) so
+       the data cache has correct ROM data. Then clean to DRAM so both
+       cached and uncached reads see it. */
     kprintf("[BOOT] Mac68k - copying 256KB ROM from bus (OVL active)...\n");
-    for (int i = 0; i < 262144; i += 4)
     {
-        *(volatile uint32_t *)((uintptr_t)0x400000 + i) = ps_read_32(i);
+        volatile uint32_t *rom_cached = (volatile uint32_t *)0xffffff9000400000ULL;
+        for (int i = 0; i < 262144; i += 4)
+        {
+            rom_cached[i >> 2] = ps_read_32(i);
+        }
     }
+    /* Clean data cache for ROM region to ensure DRAM is updated,
+       then barrier so all observers see the writes */
+    for (uintptr_t a = 0xffffff9000400000ULL; a < 0xffffff9000440000ULL; a += 64)
+        asm volatile("dc cvac, %0" :: "r"(a) : "memory");
     asm volatile("dsb sy" ::: "memory");
     kprintf("[BOOT] Mac68k - ROM copied. First words: %08x %08x\n",
-            *(volatile uint32_t *)(uintptr_t)0x400000, *(volatile uint32_t *)(uintptr_t)0x400004);
+            *(volatile uint32_t *)0xffffff9000400000ULL,
+            *(volatile uint32_t *)0xffffff9000400004ULL);
 
     /* Map ROM at 0x400000 so JIT code (EL0) reads directly from Pi RAM */
     mmu_map(0x400000, 0x400000, 262144,
