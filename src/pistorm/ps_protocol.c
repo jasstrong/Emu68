@@ -1107,8 +1107,9 @@ void bus_task(void)
 
     kprintf("[BUS] Bus controller activated on core 3\n");
     bus_task_ready = 1;
-    asm volatile("dmb sy" ::: "memory");
+    asm volatile("dsb sy" ::: "memory");
     asm volatile("sev");
+    kprintf("[BUS] bus_task_ready set to %d\n", bus_task_ready);
 
     uint32_t bus_task_debug_count = 0;
 

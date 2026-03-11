@@ -1550,7 +1550,17 @@ void boot(void *dtree)
     asm volatile("sev");
 
     kprintf("[BOOT] Mac68k - waiting for bus controller on core 3\n");
-    while (!bus_task_ready) { asm volatile("yield"); }
+    {
+        uint32_t wait_count = 0;
+        while (!bus_task_ready) {
+            asm volatile("yield");
+            if (++wait_count == 50000000) {
+                asm volatile("dsb sy" ::: "memory");
+                kprintf("[BOOT] Still waiting, bus_task_ready=%d\n", bus_task_ready);
+                wait_count = 0;
+            }
+        }
+    }
     kprintf("[BOOT] Mac68k - bus_task_ready=%d, starting emulation\n", bus_task_ready);
 #endif
 
