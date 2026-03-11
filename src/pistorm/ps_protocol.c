@@ -1079,6 +1079,18 @@ void bus_task(void)
         asm volatile("msr CNTKCTL_EL1, %0" :: "r"(3 | (1 << 2) | (3 << 8) | (2 << 4)));
 
     kprintf("[BUS] Bus controller activated on core 3\n");
+
+    /* Test: read GPIO pin level register directly to verify MMIO access works */
+    uint32_t test_gpio = LE32(*(gpio + 13));
+    kprintf("[BUS] GPIO GPLEV0 = %08x (TXN=%d, IPL=%d)\n", test_gpio,
+            (test_gpio >> PIN_TXN_IN_PROGRESS) & 1,
+            (test_gpio >> PIN_IPL_ZERO) & 1);
+
+    /* Test: try a direct bus read to verify FPGA responds */
+    kprintf("[BUS] Testing direct read from 0x400000 (ROM)...\n");
+    unsigned int test_val = ps_read_16_int_nowbwait(0x400000);
+    kprintf("[BUS] Direct read 0x400000 = %04x\n", test_val);
+
     bus_task_ready = 1;
     asm volatile("dmb sy" ::: "memory");
 
@@ -1090,9 +1102,8 @@ void bus_task(void)
             uint32_t idx = bus_tail & (BUS_FIFO_SIZE - 1);
             struct BusRequest req = bus_fifo[idx];
 
-            if (bus_task_debug_count < 20) {
-                kprintf("[BUS3] %c%d %06x\n", req.type ? 'R' : 'W', req.size, req.addr);
-                bus_task_debug_count++;
+            if (bus_task_debug_count < 40) {
+                kprintf("[BUS3] %c%d %06x", req.type ? 'R' : 'W', req.size, req.addr);
             }
 
             if (req.type == BUS_TYPE_WRITE) {
