@@ -425,12 +425,13 @@ void ps_setup_protocol() {
     *(gpio + 1) = LE32(INPUT[1]);
     *(gpio + 2) = LE32(INPUT[2]);
 
-    /* Disable pulls on data bus pins (GPIO 8-23) so they don't fight
+    /* Disable pulls on all FPGA-driven input pins so they don't fight
        the FPGA's output drivers during reads.
+       GPIO 0=TXN, 1=IPL, 5=RESET, 8-23=data bus
        BCM2837/BCM2710 sequence: GPPUD=0, wait, GPPUDCLK0=mask, wait, clear both */
     *(gpio + 37) = LE32(0);           /* GPPUD: 0 = disable pull */
     usleep(10);
-    *(gpio + 38) = LE32(0x00FFFF00); /* GPPUDCLK0: GPIO 8-23 */
+    *(gpio + 38) = LE32(0x00FFFF23); /* GPPUDCLK0: GPIO 0,1,5,8-23 */
     usleep(10);
     *(gpio + 37) = LE32(0);
     *(gpio + 38) = LE32(0);
