@@ -329,55 +329,6 @@ static void setup_gpclk() {
 
 static unsigned int ps_read_16_int_nowbwait(unsigned int address);
 
-/* Ensure MMIO stores reach the peripheral before continuing */
-#define GPIO_SETTLE() asm volatile("dsb sy" ::: "memory")
-
-/* Mask/unmask IRQ+FIQ during bus cycles */
-#define BUS_IRQ_OFF() asm volatile("msr DAIFSet, #3" ::: "memory")
-#define BUS_IRQ_ON()  asm volatile("msr DAIFClr, #3" ::: "memory")
-
-/* TXN timeout: if FPGA doesn't complete within this many spins, reset and retry */
-#define TXN_TIMEOUT 10000
-#define TXN_MAX_RETRIES 3
-
-#define WR_STROBE() do { \
-    *(gpio + 7)  = LE32(1 << PIN_WR); \
-    *(gpio + 7)  = LE32(1 << PIN_WR); \
-    *(gpio + 7)  = LE32(1 << PIN_WR); \
-    *(gpio + 7)  = LE32(1 << PIN_WR); \
-    *(gpio + 7)  = LE32(1 << PIN_WR); \
-    *(gpio + 7)  = LE32(1 << PIN_WR); \
-    *(gpio + 10) = LE32(1 << PIN_WR); \
-    *(gpio + 10) = LE32(1 << PIN_WR); \
-    *(gpio + 10) = LE32(1 << PIN_WR); \
-} while(0)
-
-#define RD_STROBE() do { \
-    *(gpio + 7)  = LE32(1 << PIN_RD); \
-    *(gpio + 7)  = LE32(1 << PIN_RD); \
-    *(gpio + 7)  = LE32(1 << PIN_RD); \
-    *(gpio + 7)  = LE32(1 << PIN_RD); \
-    *(gpio + 7)  = LE32(1 << PIN_RD); \
-    *(gpio + 7)  = LE32(1 << PIN_RD); \
-} while(0)
-
-static inline void ps_reset_bus(void)
-{
-    /* Clear all data/control pins */
-    *(gpio + 10) = LE32(CLEAR_BITS);
-    /* Set pins to input */
-    *(gpio + 0) = LE32(INPUT[0]);
-    *(gpio + 1) = LE32(INPUT[1]);
-    *(gpio + 2) = LE32(INPUT[2]);
-    /* Quick state machine reset via status register */
-    ps_write_status_reg(STATUS_BIT_INIT);
-    usleep(100);
-    ps_write_status_reg(0);
-    usleep(50);
-    /* Dummy read to warm up FPGA after reset */
-    (void)ps_read_16_int_nowbwait(0);
-}
-
 void ps_setup_protocol() {
     uint64_t clock;
     uint64_t delay;
@@ -427,8 +378,7 @@ void ps_setup_protocol() {
 
     /* Disable pulls on all FPGA-driven input pins so they don't fight
        the FPGA's output drivers during reads.
-       GPIO 0=TXN, 1=IPL, 5=RESET, 8-23=data bus
-       BCM2837/BCM2710 sequence: GPPUD=0, wait, GPPUDCLK0=mask, wait, clear both */
+       GPIO 0=TXN, 1=IPL, 5=RESET, 8-23=data bus */
     *(gpio + 37) = LE32(0);           /* GPPUD: 0 = disable pull */
     usleep(10);
     *(gpio + 38) = LE32(0x00FFFF23); /* GPPUDCLK0: GPIO 0,1,5,8-23 */
@@ -439,8 +389,7 @@ void ps_setup_protocol() {
     *(gpio + 7) = LE32(TXD_BIT);
 
 #ifdef MAC68K
-    /* Reset FPGA state machine and do warm-up reads.
-       The first bus cycle after reset may not assert TXN. */
+    /* Reset FPGA state machine and do warm-up reads */
     ps_reset_state_machine();
     {
         unsigned int d;
@@ -456,6 +405,12 @@ static void ps_write_8_int(unsigned int address, unsigned int data);
 
 static void ps_write_16_int(unsigned int address, unsigned int data)
 {
+    uint64_t tmp;
+    asm volatile("mrs %0, CNTFRQ_EL0":"=r"(tmp));
+
+//    if (address > 0xffffff)
+//        return;
+
     address &= 0xffffff;
 
     if (address & 1)
@@ -465,89 +420,135 @@ static void ps_write_16_int(unsigned int address, unsigned int data)
     }
     else
     {
-        int retries = TXN_MAX_RETRIES;
-retry_w16:
-        BUS_IRQ_OFF();
         *(gpio + 0) = LE32(OUTPUT[0]);
         *(gpio + 1) = LE32(OUTPUT[1]);
         *(gpio + 2) = LE32(OUTPUT[2]);
 
         *(gpio + 7) = LE32(((data & 0xffff) << 8) | (REG_DATA << PIN_A0));
-        GPIO_SETTLE();
-        WR_STROBE();
+        if (tmp > 20000000)
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
+        else
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
         *(gpio + 10) = LE32(CLEAR_BITS);
 
         *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
-        GPIO_SETTLE();
-        WR_STROBE();
+        if (tmp > 20000000)
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
+        else
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
         *(gpio + 10) = LE32(CLEAR_BITS);
 
         *(gpio + 7) = LE32(((0x0000 | ((address >> 16) & 0x00ff)) << 8) | (REG_ADDR_HI << PIN_A0));
-        GPIO_SETTLE();
-        WR_STROBE();
+        if (tmp > 20000000)
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
+        else
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
         *(gpio + 10) = LE32(CLEAR_BITS);
 
         *(gpio + 0) = LE32(INPUT[0]);
         *(gpio + 1) = LE32(INPUT[1]);
         *(gpio + 2) = LE32(INPUT[2]);
 
-        {
-            int timeout = TXN_TIMEOUT;
-            while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {
-                if (--timeout == 0) {
-                    BUS_IRQ_ON();
-                    if (--retries > 0) { ps_reset_bus(); goto retry_w16; }
-                    break;
-                }
-            }
-        }
-        BUS_IRQ_ON();
+        while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {}
     }
 }
 
 static void ps_write_8_int(unsigned int address, unsigned int data)
 {
+    uint64_t tmp;
+    asm volatile("mrs %0, CNTFRQ_EL0":"=r"(tmp));
+
+//    if (address > 0xffffff)
+//        return;
+
     address &= 0xffffff;
 
     data = (data & 0xff) | (data << 8);
 
-    int retries = TXN_MAX_RETRIES;
-retry_w8:
-    BUS_IRQ_OFF();
     *(gpio + 0) = LE32(OUTPUT[0]);
     *(gpio + 1) = LE32(OUTPUT[1]);
     *(gpio + 2) = LE32(OUTPUT[2]);
 
     *(gpio + 7) = LE32(((data & 0xffff) << 8) | (REG_DATA << PIN_A0));
-    GPIO_SETTLE();
-    WR_STROBE();
+    if (tmp > 20000000)
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
+    else
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
-    GPIO_SETTLE();
-    WR_STROBE();
+    if (tmp > 20000000)
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
+    else
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 7) = LE32(((0x0100 | ((address >> 16) & 0x00ff)) << 8) | (REG_ADDR_HI << PIN_A0));
-    GPIO_SETTLE();
-    WR_STROBE();
+    if (tmp > 20000000)
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
+    else
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 0) = LE32(INPUT[0]);
     *(gpio + 1) = LE32(INPUT[1]);
     *(gpio + 2) = LE32(INPUT[2]);
 
-    {
-        int timeout = TXN_TIMEOUT;
-        while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {
-            if (--timeout == 0) {
-                BUS_IRQ_ON();
-                if (--retries > 0) { ps_reset_bus(); goto retry_w8; }
-                break;
-            }
-        }
-    }
-    BUS_IRQ_ON();
+    while (*(gpio + 13) & LE32((1 << PIN_TXN_IN_PROGRESS))) {}
 }
 
 static void ps_write_32_int(unsigned int address, unsigned int value)
@@ -567,7 +568,13 @@ static void ps_write_32_int(unsigned int address, unsigned int value)
 
 static unsigned int ps_read_16_int_nowbwait(unsigned int address)
 {
+    uint64_t tmp;
+    asm volatile("mrs %0, CNTFRQ_EL0":"=r"(tmp));
+
     address &= 0xffffff;
+
+//    if (address > 0xffffff)
+//        return 0xffff;
 
     if (address & 1)
     {
@@ -580,21 +587,40 @@ static unsigned int ps_read_16_int_nowbwait(unsigned int address)
     }
     else
     {
-        int retries = TXN_MAX_RETRIES;
-retry_r16:
-        BUS_IRQ_OFF();
         *(gpio + 0) = LE32(OUTPUT[0]);
         *(gpio + 1) = LE32(OUTPUT[1]);
         *(gpio + 2) = LE32(OUTPUT[2]);
 
         *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
-        GPIO_SETTLE();
-        WR_STROBE();
+        if (tmp > 20000000)
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
+        else
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
         *(gpio + 10) = LE32(CLEAR_BITS);
 
         *(gpio + 7) = LE32(((0x0200 | ((address >> 16) & 0x00ff)) << 8) | (REG_ADDR_HI << PIN_A0));
-        GPIO_SETTLE();
-        WR_STROBE();
+        if (tmp > 20000000)
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
+        else
+        {
+            *(gpio + 7) = LE32(1 << PIN_WR);
+            *(gpio + 10) = LE32(1 << PIN_WR);
+        }
         *(gpio + 10) = LE32(CLEAR_BITS);
 
         *(gpio + 0) = LE32(INPUT[0]);
@@ -602,25 +628,19 @@ retry_r16:
         *(gpio + 2) = LE32(INPUT[2]);
 
         *(gpio + 7) = LE32(REG_DATA << PIN_A0);
-        GPIO_SETTLE();
-        RD_STROBE();
-
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        if (tmp > 20000000)
         {
-            int timeout = TXN_TIMEOUT;
-            while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {
-                if (--timeout == 0) {
-                    *(gpio + 10) = LE32(CLEAR_BITS);
-                    BUS_IRQ_ON();
-                    if (--retries > 0) { ps_reset_bus(); goto retry_r16; }
-                    return 0xffff;
-                }
-            }
-            unsigned int value = LE32(*(gpio + 13));
-
-            *(gpio + 10) = LE32(CLEAR_BITS);
-            BUS_IRQ_ON();
-            return (value >> 8) & 0xffff;
+            *(gpio + 7) = LE32(1 << PIN_RD);
+            *(gpio + 7) = LE32(1 << PIN_RD);
+            *(gpio + 7) = LE32(1 << PIN_RD);
         }
+
+        while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
+        unsigned int value = LE32(*(gpio + 13));
+
+        *(gpio + 10) = LE32(CLEAR_BITS);
+        return (value >> 8) & 0xffff;
     }
 }
 
@@ -634,27 +654,52 @@ unsigned int ps_read_16_int(unsigned int address)
 
 unsigned int ps_read_8_int(unsigned int address)
 {
+    uint64_t tmp;
+    asm volatile("mrs %0, CNTFRQ_EL0":"=r"(tmp));
+
 #if PISTORM_WRITE_BUFFER
     wb_waitfree();
 #endif
 
     address &= 0xffffff;
 
-    int retries = TXN_MAX_RETRIES;
-retry_r8:
-    BUS_IRQ_OFF();
+//    if (address > 0xffffff)
+//        return 0xff;
+
     *(gpio + 0) = LE32(OUTPUT[0]);
     *(gpio + 1) = LE32(OUTPUT[1]);
     *(gpio + 2) = LE32(OUTPUT[2]);
 
     *(gpio + 7) = LE32(((address & 0xffff) << 8) | (REG_ADDR_LO << PIN_A0));
-    GPIO_SETTLE();
-    WR_STROBE();
+    if (tmp > 20000000)
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
+    else
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 7) = LE32(((0x0300 | ((address >> 16) & 0x00ff)) << 8) | (REG_ADDR_HI << PIN_A0));
-    GPIO_SETTLE();
-    WR_STROBE();
+    if (tmp > 20000000)
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
+    else
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 0) = LE32(INPUT[0]);
@@ -662,31 +707,25 @@ retry_r8:
     *(gpio + 2) = LE32(INPUT[2]);
 
     *(gpio + 7) = LE32(REG_DATA << PIN_A0);
-    GPIO_SETTLE();
-    RD_STROBE();
-
+    *(gpio + 7) = LE32(1 << PIN_RD);
+    if (tmp > 20000000)
     {
-        int timeout = TXN_TIMEOUT;
-        while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {
-            if (--timeout == 0) {
-                *(gpio + 10) = LE32(CLEAR_BITS);
-                BUS_IRQ_ON();
-                if (--retries > 0) { ps_reset_bus(); goto retry_r8; }
-                return 0xff;
-            }
-        }
-        unsigned int value = LE32(*(gpio + 13));
-
-        *(gpio + 10) = LE32(CLEAR_BITS);
-        BUS_IRQ_ON();
-
-        value = (value >> 8) & 0xffff;
-
-        if ((address & 1) == 0)
-            return (value >> 8) & 0xff;  // EVEN, A0=0,UDS
-        else
-            return value & 0xff;  // ODD , A0=1,LDS
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
     }
+
+    while (*(gpio + 13) & LE32(1 << PIN_TXN_IN_PROGRESS)) {}
+    unsigned int value = LE32(*(gpio + 13));
+
+    *(gpio + 10) = LE32(CLEAR_BITS);
+
+    value = (value >> 8) & 0xffff;
+
+    if ((address & 1) == 0)
+        return (value >> 8) & 0xff;  // EVEN, A0=0,UDS
+    else
+        return value & 0xff;  // ODD , A0=1,LDS
 }
 
 unsigned int ps_read_32_int(unsigned int address)
@@ -713,13 +752,28 @@ unsigned int ps_read_32_int(unsigned int address)
 
 void ps_write_status_reg(unsigned int value)
 {
+    uint64_t tmp;
+    asm volatile("mrs %0, CNTFRQ_EL0":"=r"(tmp));
+
     *(gpio + 0) = LE32(OUTPUT[0]);
     *(gpio + 1) = LE32(OUTPUT[1]);
     *(gpio + 2) = LE32(OUTPUT[2]);
 
     *(gpio + 7) = LE32(((value & 0xffff) << 8) | (REG_STATUS << PIN_A0));
-    GPIO_SETTLE();
-    WR_STROBE();
+
+    *(gpio + 7) = LE32(1 << PIN_WR);
+    *(gpio + 7) = LE32(1 << PIN_WR);  // delay
+    if (tmp > 20000000)
+    {
+        *(gpio + 7) = LE32(1 << PIN_WR);
+        *(gpio + 7) = LE32(1 << PIN_WR);
+    }
+    *(gpio + 10) = LE32(1 << PIN_WR);
+    if (tmp > 20000000)
+    {
+        *(gpio + 10) = LE32(1 << PIN_WR);
+        *(gpio + 10) = LE32(1 << PIN_WR);
+    }
     *(gpio + 10) = LE32(CLEAR_BITS);
 
     *(gpio + 0) = LE32(INPUT[0]);
@@ -729,9 +783,21 @@ void ps_write_status_reg(unsigned int value)
 
 unsigned int ps_read_status_reg()
 {
+    uint64_t tmp;
+    asm volatile("mrs %0, CNTFRQ_EL0":"=r"(tmp));
+
     *(gpio + 7) = LE32(REG_STATUS << PIN_A0);
-    GPIO_SETTLE();
-    RD_STROBE();
+    *(gpio + 7) = LE32(1 << PIN_RD);
+    *(gpio + 7) = LE32(1 << PIN_RD);
+    *(gpio + 7) = LE32(1 << PIN_RD);
+    *(gpio + 7) = LE32(1 << PIN_RD);
+    if (tmp > 20000000)
+    {
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
+        *(gpio + 7) = LE32(1 << PIN_RD);
+    }
     unsigned int value = LE32(*(gpio + 13));
 
     *(gpio + 10) = LE32(CLEAR_BITS);
@@ -1180,6 +1246,8 @@ uint32_t rnd() {
     return _seed;
 }
 
+/* BupTest by beeanyew, ported to Emu68 */
+
 /* RAM walk test — exercises the physical bus before the emulator runs */
 
 void ps_ramtest(void)
@@ -1189,7 +1257,7 @@ void ps_ramtest(void)
     uint32_t base = 0x000100;
     uint32_t e0;
 
-    kprintf_pc(__putc, NULL, "[RAMTEST] Bus test (pulls disabled)\n");
+    kprintf_pc(__putc, NULL, "[RAMTEST] Bus test\n");
 
     /* Deassert ROM overlay */
     (void)ps_read_16(0x400000);
