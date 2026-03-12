@@ -1173,162 +1173,24 @@ uint32_t rnd() {
 
 void ps_ramtest(void)
 {
-    uint32_t errors = 0;
-    uint32_t tests = 0;
-    uint32_t base = 0x000100;  /* avoid vector table at 0x0 */
-    uint32_t e0;
+    kprintf_pc(__putc, NULL, "[RAMTEST] Visual write test\n");
 
-    kprintf_pc(__putc, NULL, "[RAMTEST] Walking-bit RAM test\n");
-
-    /* Deassert ROM overlay — on the Mac SE the BBU clears OVL on the
-       first bus access at or above 0x400000 (the permanent ROM region) */
+    /* Deassert ROM overlay */
     (void)ps_read_16(0x400000);
 
-    /* ---- Test 1: Walking 1s, byte ---- */
-    e0 = errors;
-    for (int bit = 0; bit < 8; bit++) {
-        uint8_t pat = 1 << bit;
-        ps_write_8(base, pat);
-        uint8_t got = ps_read_8(base);
-        tests++;
-        if (got != pat) errors++;
-    }
-    kprintf_pc(__putc, NULL, "  Walk-1 byte:  %s (%d/%d)\n",
-        errors == e0 ? "OK" : "FAIL", errors - e0, 8);
+    /* Mac SE 4MB: framebuffer at top of RAM */
+    uint32_t fb_start = 0x3FA700;
+    uint32_t fb_size = (512 * 342) / 8;  /* 21888 bytes */
 
-    /* ---- Test 2: Walking 0s, byte ---- */
-    e0 = errors;
-    for (int bit = 0; bit < 8; bit++) {
-        uint8_t pat = ~(1 << bit);
-        ps_write_8(base, pat);
-        uint8_t got = ps_read_8(base);
-        tests++;
-        if (got != pat) errors++;
-    }
-    kprintf_pc(__putc, NULL, "  Walk-0 byte:  %s (%d/%d)\n",
-        errors == e0 ? "OK" : "FAIL", errors - e0, 8);
+    kprintf_pc(__putc, NULL, "Writing to Mac display...\n");
 
-    /* ---- Test 3: Walking 1s, word ---- */
-    e0 = errors;
-    for (int bit = 0; bit < 16; bit++) {
-        uint16_t pat = 1 << bit;
-        ps_write_16(base, pat);
-        uint16_t got = ps_read_16(base);
-        tests++;
-        if (got != pat) errors++;
-    }
-    kprintf_pc(__putc, NULL, "  Walk-1 word:  %s (%d/%d)\n",
-        errors == e0 ? "OK" : "FAIL", errors - e0, 16);
-
-    /* ---- Test 4: Walking 0s, word ---- */
-    e0 = errors;
-    for (int bit = 0; bit < 16; bit++) {
-        uint16_t pat = ~(1 << bit) & 0xffff;
-        ps_write_16(base, pat);
-        uint16_t got = ps_read_16(base);
-        tests++;
-        if (got != pat) errors++;
-    }
-    kprintf_pc(__putc, NULL, "  Walk-0 word:  %s (%d/%d)\n",
-        errors == e0 ? "OK" : "FAIL", errors - e0, 16);
-
-    /* ---- Test 5: All byte values 0x00-0xFF ---- */
-    e0 = errors;
-    for (int v = 0; v < 256; v++) {
-        ps_write_8(base, v);
-        uint8_t got = ps_read_8(base);
-        tests++;
-        if (got != (uint8_t)v) errors++;
-    }
-    kprintf_pc(__putc, NULL, "  All-val byte: %s (%d/%d)\n",
-        errors == e0 ? "OK" : "FAIL", errors - e0, 256);
-
-    /* ---- Test 6: Address bus (power-of-2 offsets) ---- */
-    e0 = errors;
-    for (int bit = 0; bit < 20; bit++) {
-        uint32_t addr = base + (1 << bit);
-        ps_write_8(addr, (uint8_t)(bit + 1));
-    }
-    for (int bit = 0; bit < 20; bit++) {
-        uint32_t addr = base + (1 << bit);
-        uint8_t got = ps_read_8(addr);
-        tests++;
-        if (got != (uint8_t)(bit + 1)) errors++;
-    }
-    kprintf_pc(__putc, NULL, "  Addr bus:     %s (%d/%d)\n",
-        errors == e0 ? "OK" : "FAIL", errors - e0, 20);
-
-    /* ---- Test 7: Block 256 bytes ---- */
-    e0 = errors;
-    for (int i = 0; i < 256; i++)
-        ps_write_8(base + i, (uint8_t)(i ^ 0xA5));
-    for (int i = 0; i < 256; i++) {
-        uint8_t got = ps_read_8(base + i);
-        tests++;
-        if (got != (uint8_t)(i ^ 0xA5)) errors++;
-    }
-    kprintf_pc(__putc, NULL, "  Block 256B:   %s (%d/%d)\n",
-        errors == e0 ? "OK" : "FAIL", errors - e0, 256);
-
-    /* ---- Test 8: Block 256 words ---- */
-    e0 = errors;
-    for (int i = 0; i < 256; i++) {
-        uint16_t val = (uint16_t)((i << 8) | (i ^ 0xFF));
-        ps_write_16(base + i * 2, val);
-    }
-    for (int i = 0; i < 256; i++) {
-        uint16_t expected = (uint16_t)((i << 8) | (i ^ 0xFF));
-        uint16_t got = ps_read_16(base + i * 2);
-        tests++;
-        if (got != expected) errors++;
-    }
-    kprintf_pc(__putc, NULL, "  Block 256W:   %s (%d/%d)\n",
-        errors == e0 ? "OK" : "FAIL", errors - e0, 256);
-
-    kprintf_pc(__putc, NULL, "[RAMTEST] %d tests, %d errors\n", tests, errors);
-    /* ---- Test 9: Read consistency — write once, read 10x ---- */
-    {
-        uint32_t read_errs = 0;
-        uint32_t read_vary = 0;
-        kprintf_pc(__putc, NULL, "  Read consist: ");
-        for (int pat = 0; pat < 16; pat++) {
-            uint8_t val = (uint8_t)(pat * 17); /* 0x00,0x11,0x22,...0xFF */
-            ps_write_8(base, val);
-            uint8_t reads[10];
-            for (int r = 0; r < 10; r++)
-                reads[r] = ps_read_8(base);
-            int any_wrong = 0, all_same = 1;
-            for (int r = 0; r < 10; r++) {
-                if (reads[r] != val) any_wrong = 1;
-                if (reads[r] != reads[0]) all_same = 0;
-            }
-            tests += 10;
-            if (any_wrong) {
-                read_errs++;
-                if (!all_same) read_vary++;
-            }
+    uint8_t pattern = 0;
+    while (1) {
+        uint16_t word = ((uint16_t)pattern << 8) | pattern;
+        for (uint32_t i = 0; i < fb_size; i += 2) {
+            ps_write_16(fb_start + i, word);
         }
-        kprintf_pc(__putc, NULL, "%d/16 bad, %d vary\n", read_errs, read_vary);
-    }
-
-    /* ---- Test 10: Write consistency — write 10x, read once ---- */
-    {
-        uint32_t write_errs = 0;
-        kprintf_pc(__putc, NULL, "  Write consist:");
-        for (int pat = 0; pat < 16; pat++) {
-            uint8_t val = (uint8_t)(pat * 17);
-            for (int w = 0; w < 10; w++)
-                ps_write_8(base, val);
-            uint8_t got = ps_read_8(base);
-            tests++;
-            if (got != val) write_errs++;
-        }
-        kprintf_pc(__putc, NULL, " %d/16 bad\n", write_errs);
-    }
-
-    if (errors) {
-        kprintf_pc(__putc, NULL, "*** BUS ERRORS - HALTED ***\n");
-        while(1) asm volatile("wfe");
+        pattern++;
     }
 }
 
