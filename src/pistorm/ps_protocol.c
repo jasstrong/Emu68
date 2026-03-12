@@ -329,9 +329,9 @@ static void setup_gpclk() {
 
 static unsigned int ps_read_16_int_nowbwait(unsigned int address);
 
+/* Use ISB as a ~20ns delay without touching GPIO registers */
 #define GPIO_SETTLE() do { \
-    (void)*(gpio + 13); \
-    (void)*(gpio + 13); \
+    asm volatile("isb" ::: "memory"); \
 } while(0)
 
 void ps_setup_protocol() {
