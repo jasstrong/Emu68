@@ -97,6 +97,7 @@ void ps_write_64(unsigned int address, uint64_t data);
 void ps_write_128(unsigned int address, uint128_t data);
 
 void ps_buptest(unsigned int size_kb, unsigned int maxiter);
+void ps_ramtest(void);
 
 unsigned int ps_read_status_reg();
 void ps_write_status_reg(unsigned int value);

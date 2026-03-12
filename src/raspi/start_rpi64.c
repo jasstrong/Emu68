@@ -44,19 +44,28 @@ uint32_t text_y = 0;
 const int modulo = 192;
 int purple = 0;
 int black = 0;
+uint16_t bg_color = 0xFFFF;
 
 void put_char(uint8_t c)
 {
     if (framebuffer && pitch)
     {
-        uint16_t *pos_in_image = (uint16_t*)((uintptr_t)framebuffer + (text_y * 16 + 5)* pitch);
-        pos_in_image += 4 + text_x * 8;
+        uint32_t max_rows = fb_height / 16;
+        uint32_t max_cols = (fb_width - 8) / 8;
 
         if (c == 10) {
             text_x = 0;
             text_y++;
+            return;
         }
-        else if (c >= 32) {
+
+        if (text_y >= max_rows || text_x >= max_cols)
+            return;
+
+        uint16_t *pos_in_image = (uint16_t*)((uintptr_t)framebuffer + (text_y * 16 + 5)* pitch);
+        pos_in_image += 4 + text_x * 8;
+
+        if (c >= 32) {
             uint32_t loc = (topaz8_charloc[c - 32] >> 16) >> 3;
             const uint8_t *data = &topaz8_chardata[loc];
 
@@ -64,17 +73,10 @@ void put_char(uint8_t c)
                 const uint8_t byte = *data;
 
                 for (int x=0; x < 8; x++) {
-                    if (byte & (0x80 >> x)) {
-                        if (purple) {
-                            pos_in_image[x] = LE16(0xed51);
-                        }
-                        else if (black) {
-                            pos_in_image[x] = LE16(0x630c);
-                        }
-                        else {
-                            pos_in_image[x] = 0;
-                        }
-                    }
+                    if (byte & (0x80 >> x))
+                        pos_in_image[x] = LE16(0xFFFF);
+                    else
+                        pos_in_image[x] = 0;
                 }
 
                 if (y & 1)
@@ -95,31 +97,6 @@ static void __putc(void *data, char c)
 void display_logo()
 {
     struct Size sz = get_display_size();
-    uint32_t start_x, start_y;
-    uint16_t *buff;
-    int32_t pix_cnt = (uint32_t)EmuLogo.el_Width * (uint32_t)EmuLogo.el_Height;
-    uint8_t *rle = EmuLogo.el_Data;
-    int x = 0;
-    of_node_t *e = NULL;
-
-    e = dt_find_node("/chosen");
-    if (e)
-    {
-        of_property_t * prop = dt_find_property(e, "bootargs");
-        if (prop)
-        {
-            const char *tok;
-            if ((tok = find_token(prop->op_value, "logo=")))
-            {
-                tok += 5;
-
-                if (strncmp(tok, "purple", 6) == 0)
-                    purple = 1;
-                else if (strncmp(tok, "black", 5) == 0)
-                    black = 1;
-            }
-        }
-    }
 
     kprintf("[BOOT] Display size is %dx%d\n", sz.width, sz.height);
     fb_width = sz.width;
@@ -127,107 +104,16 @@ void display_logo()
     init_display(sz, (void**)&framebuffer, &pitch);
     kprintf("[BOOT] Framebuffer @ %08x\n", framebuffer);
 
-    start_x = (sz.width - EmuLogo.el_Width) / 2;
-    start_y = (sz.height - EmuLogo.el_Height) / 2;
+    /* Black background, white text */
+    bg_color = 0x0000;
+    for (int i = 0; i < sz.width * sz.height; i++)
+        framebuffer[i] = 0;
 
-    kprintf("[BOOT] Logo start coordinate: %dx%d, size: %dx%d\n", start_x, start_y, EmuLogo.el_Width, EmuLogo.el_Height);
-
-    /* Calculate text coordinate for version string */
-    text_y = (fb_height - 16 - 5) / 16;
-    text_x = (fb_width - strlen(&VERSION_STRING[6]) * 8 - 1) / 8;
-
-    /* First clear the screen. Use color in top left corner of RLE image for that */
-    {
-        uint8_t gray = rle[0];
-        uint16_t color;
-
-        if (purple)
-        {
-            gray = 240 - gray;
-            int r=-330,g=-343,b=-91;
-            r += (gray * 848) >> 8;
-            g += (gray * 768) >> 8;
-            b += (gray * 341) >> 8;
-
-            if (r < 0) r = 0;
-            if (g < 0) g = 0;
-            if (b < 0) b = 0;
-            if (r > 255) r = 255;
-            if (g > 255) g = 255;
-            if (b > 255) b = 255;
-            color = (b >> 3) | ((g >> 2) << 5) | ((r >> 3) << 11);
-        }
-        else if (black)
-        {
-            gray = 0;
-            color = (gray >> 3) | ((gray >> 2) << 5) | ((gray >> 3) << 11);
-        }
-        else
-        {
-            color = (gray >> 3) | ((gray >> 2) << 5) | ((gray >> 3) << 11);
-        }
-
-        for (int i=0; i < sz.width * sz.height; i++)
-            framebuffer[i] = LE16(color);
-    }
-
-    /* Now decode RLE and draw it on the screen */
-    buff = (uint16_t *)((uintptr_t)framebuffer + pitch*start_y);
-    buff += start_x;
-
-    while(pix_cnt > 0) {
-        uint8_t gray = *rle++;
-        uint8_t cnt = *rle++;
-        uint16_t color;
-
-        if (purple)
-        {
-            gray = 240 - gray;
-            int r=-330,g=-343,b=-91;
-            r += (gray * 848) >> 8;
-            g += (gray * 768) >> 8;
-            b += (gray * 341) >> 8;
-
-            if (r < 0) r = 0;
-            if (g < 0) g = 0;
-            if (b < 0) b = 0;
-            if (r > 255) r = 255;
-            if (g > 255) g = 255;
-            if (b > 255) b = 255;
-            color = (b >> 3) | ((g >> 2) << 5) | ((r >> 3) << 11);
-        }
-        else if (black)
-        {
-            int g = ((120 - (int)gray) * 5) / 4;
-            if (g < 0)
-                g = 0;
-            if (g > 255)
-                g = 255;
-
-            color = (g >> 3) | ((g >> 2) << 5) | ((g >> 3) << 11);
-        }
-        else
-        {
-            color = (gray >> 3) | ((gray >> 2) << 5) | ((gray >> 3) << 11);
-        }
-
-        pix_cnt -= cnt;
-        while(cnt--) {
-            buff[x++] = LE16(color);
-            /* If new line, advance the buffer by pitch and reset x counter */
-            if (x >= EmuLogo.el_Width) {
-                buff += pitch / 2;
-                x = 0;
-            }
-        }
-    }
-
-    /* Print EMu68 version number and git sha. */
-    kprintf_pc(__putc, NULL, &VERSION_STRING[6]);
-
-    /* Reset test coordinates for further text printing (e.g. buptest) */
     text_x = 0;
     text_y = 0;
+
+    kprintf_pc(__putc, NULL, &VERSION_STRING[6]);
+    kprintf_pc(__putc, NULL, "\n");
 }
 
 uintptr_t top_of_ram;
@@ -346,6 +232,7 @@ void platform_post_init()
 #else
     kprintf("[BOOT] Mac68k mode - sending RESET\n");
     ps_pulse_reset();
+    ps_ramtest();
 #endif
 #endif
 
