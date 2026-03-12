@@ -425,6 +425,16 @@ void ps_setup_protocol() {
     *(gpio + 1) = LE32(INPUT[1]);
     *(gpio + 2) = LE32(INPUT[2]);
 
+    /* Disable pulls on data bus pins (GPIO 8-23) so they don't fight
+       the FPGA's output drivers during reads.
+       BCM2837/BCM2710 sequence: GPPUD=0, wait, GPPUDCLK0=mask, wait, clear both */
+    *(gpio + 37) = LE32(0);           /* GPPUD: 0 = disable pull */
+    usleep(10);
+    *(gpio + 38) = LE32(0x00FFFF00); /* GPPUDCLK0: GPIO 8-23 */
+    usleep(10);
+    *(gpio + 37) = LE32(0);
+    *(gpio + 38) = LE32(0);
+
     *(gpio + 7) = LE32(TXD_BIT);
 
 #ifdef MAC68K
@@ -1173,24 +1183,79 @@ uint32_t rnd() {
 
 void ps_ramtest(void)
 {
-    kprintf_pc(__putc, NULL, "[RAMTEST] Visual write test\n");
+    uint32_t errors = 0;
+    uint32_t tests = 0;
+    uint32_t base = 0x000100;
+    uint32_t e0;
+
+    kprintf_pc(__putc, NULL, "[RAMTEST] Bus test (pulls disabled)\n");
 
     /* Deassert ROM overlay */
     (void)ps_read_16(0x400000);
 
-    /* Mac SE 4MB: framebuffer at top of RAM */
-    uint32_t fb_start = 0x3FA700;
-    uint32_t fb_size = (512 * 342) / 8;  /* 21888 bytes */
+    /* Test 1: All byte values */
+    e0 = errors;
+    for (int v = 0; v < 256; v++) {
+        ps_write_8(base, v);
+        uint8_t got = ps_read_8(base);
+        tests++;
+        if (got != (uint8_t)v) errors++;
+    }
+    kprintf_pc(__putc, NULL, "  All-val byte: %s (%d/%d)\n",
+        errors == e0 ? "OK" : "FAIL", errors - e0, 256);
 
-    kprintf_pc(__putc, NULL, "Writing to Mac display...\n");
+    /* Test 2: Walking 1s word */
+    e0 = errors;
+    for (int bit = 0; bit < 16; bit++) {
+        uint16_t pat = 1 << bit;
+        ps_write_16(base, pat);
+        uint16_t got = ps_read_16(base);
+        tests++;
+        if (got != pat) errors++;
+    }
+    kprintf_pc(__putc, NULL, "  Walk-1 word:  %s (%d/%d)\n",
+        errors == e0 ? "OK" : "FAIL", errors - e0, 16);
 
-    uint8_t pattern = 0;
-    while (1) {
-        uint16_t word = ((uint16_t)pattern << 8) | pattern;
-        for (uint32_t i = 0; i < fb_size; i += 2) {
-            ps_write_16(fb_start + i, word);
+    /* Test 3: Block 256 words */
+    e0 = errors;
+    for (int i = 0; i < 256; i++) {
+        uint16_t val = (uint16_t)((i << 8) | (i ^ 0xFF));
+        ps_write_16(base + i * 2, val);
+    }
+    for (int i = 0; i < 256; i++) {
+        uint16_t expected = (uint16_t)((i << 8) | (i ^ 0xFF));
+        uint16_t got = ps_read_16(base + i * 2);
+        tests++;
+        if (got != expected) errors++;
+    }
+    kprintf_pc(__putc, NULL, "  Block 256W:   %s (%d/%d)\n",
+        errors == e0 ? "OK" : "FAIL", errors - e0, 256);
+
+    /* Test 4: Read consistency */
+    {
+        uint32_t read_errs = 0, read_vary = 0;
+        for (int pat = 0; pat < 16; pat++) {
+            uint8_t val = (uint8_t)(pat * 17);
+            ps_write_8(base, val);
+            uint8_t reads[10];
+            for (int r = 0; r < 10; r++)
+                reads[r] = ps_read_8(base);
+            int any_wrong = 0, all_same = 1;
+            for (int r = 0; r < 10; r++) {
+                if (reads[r] != val) any_wrong = 1;
+                if (reads[r] != reads[0]) all_same = 0;
+            }
+            tests += 10;
+            if (any_wrong) { read_errs++; if (!all_same) read_vary++; }
         }
-        pattern++;
+        kprintf_pc(__putc, NULL, "  Read consist: %d/16 bad, %d vary\n", read_errs, read_vary);
+    }
+
+    kprintf_pc(__putc, NULL, "[RAMTEST] %d tests, %d errors\n", tests, errors);
+
+    if (errors) {
+        kprintf_pc(__putc, NULL, "*** BUS ERRORS - HALTED ***\n");
+        while(1) asm volatile("wfe");
     }
 }
 
